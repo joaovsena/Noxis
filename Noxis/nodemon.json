@@ -1,0 +1,9 @@
+{
+  "watch": ["server", "public"],
+  "ext": "js,json,html,css",
+  "ignore": [
+    "server/logs/**",
+    "server/data/users.json",
+    "node_modules/**"
+  ]
+}

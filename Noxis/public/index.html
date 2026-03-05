@@ -2,32 +2,163 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Meu MMORPG Profissional</title>
+    <title>Noxis</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
     <div id="ui-container">
-        <div id="char-creation" class="screen">
-            <h1>Criação de Personagem</h1>
+        <div id="auth-screen" class="screen">
+            <h1>Noxis</h1>
+            <p class="subtitle">Conta persistida no banco de dados. Classe definida apenas no registro.</p>
             <div class="setup-box">
+                <div class="controls">
+                    <div class="auth-buttons">
+                        <button id="tab-login" class="active">Login</button>
+                        <button id="tab-register">Registro</button>
+                    </div>
+
+                    <div id="form-login">
+                        <label>Usuario</label>
+                        <input type="text" id="login-username" maxlength="16" placeholder="usuario">
+                        <label>Senha</label>
+                        <input type="password" id="login-password" maxlength="32" placeholder="senha">
+                        <button id="btn-login">Entrar</button>
+                    </div>
+
+                    <div id="form-register" class="hidden">
+                        <label>Usuario</label>
+                        <input type="text" id="register-username" maxlength="16" placeholder="usuario">
+                        <label>Senha</label>
+                        <input type="password" id="register-password" maxlength="32" placeholder="senha">
+                        <label>Nick</label>
+                        <input type="text" id="register-nick" maxlength="12" placeholder="nick">
+                        <label>Classe</label>
+                        <select id="register-class">
+                            <option value="knight">Cavaleiro (azul)</option>
+                            <option value="shifter">Metamorfo (verde)</option>
+                            <option value="bandit">Bandido (preto)</option>
+                        </select>
+                        <button id="btn-register">Criar conta</button>
+                    </div>
+
+                    <p id="auth-status"></p>
+                </div>
                 <div id="preview-box">
                     <div id="class-preview" class="preview-knight"></div>
-                </div>
-                <div class="controls">
-                    <input type="text" id="char-name" placeholder="Nome do herói..." maxlength="12">
-                    <select id="char-gender">
-                        <option value="male">Masculino</option>
-                        <option value="female">Feminino</option>
-                    </select>
-                    <select id="char-class">
-                        <option value="knight">Cavaleiro (Azul)</option>
-                        <option value="shifter">Metamorfo (Verde)</option>
-                    </select>
-                    <button id="btn-start">Iniciar Jornada</button>
+                    <div class="preview-help">
+                        Metamorfo: alcance de teste maior.
+                        Cavaleiro: ataque apenas colado ao alvo.
+                        Bandido: rapido no ataque/movimento.
+                        Pressione C no jogo para ver atributos.
+                    </div>
                 </div>
             </div>
         </div>
     </div>
+
+    <div id="char-panel" class="panel hidden">
+        <div id="char-panel-header">Personagem (arraste)</div>
+        <div id="char-panel-name">-</div>
+        <div class="char-layout">
+            <div class="equip-col" id="equip-col-left">
+                <div class="equip-slot" data-slot="helmet">Capacete</div>
+                <div class="equip-slot" data-slot="chest">Peitoral</div>
+                <div class="equip-slot" data-slot="pants">Calca</div>
+                <div class="equip-slot" data-slot="gloves">Luva</div>
+            </div>
+            <div class="char-center">
+                <div id="panel-class-chip"></div>
+            </div>
+            <div class="equip-col" id="equip-col-right">
+                <div class="equip-slot" data-slot="boots">Bota</div>
+                <div class="equip-slot" data-slot="ring">Anel</div>
+                <div class="equip-slot" data-slot="weapon">Arma</div>
+                <div class="equip-slot" data-slot="necklace">Colar</div>
+            </div>
+        </div>
+        <div id="panel-body"></div>
+    </div>
+
+    <div id="player-card" class="hud-card hidden">
+        <div id="player-avatar"></div>
+        <div class="player-meta">
+            <div id="player-name">-</div>
+            <div class="hp-wrap"><div id="player-hp-fill"></div></div>
+            <div id="player-hp-text">HP: -</div>
+        </div>
+    </div>
+
+    <div id="minimap-wrap" class="hud-minimap hidden">
+        <canvas id="minimap-canvas" width="190" height="190"></canvas>
+        <div class="minimap-instance-bar">
+            <label for="instance-select">Instancia</label>
+            <select id="instance-select">
+                <option value="E1">E1</option>
+                <option value="E2">E2</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="worldmap-panel" class="hud-worldmap hidden">
+        <div class="worldmap-header">
+            <div>Mapa Completo (M)</div>
+            <button id="worldmap-close">Fechar</button>
+        </div>
+        <canvas id="worldmap-canvas" width="860" height="560"></canvas>
+    </div>
+
+    <div id="chat-wrap" class="hud-chat hidden">
+        <div class="chat-tabs">
+            <button class="chat-scope active" data-scope="local">Local</button>
+            <button class="chat-scope" data-scope="map">Mapa</button>
+            <button class="chat-scope" data-scope="global">Global</button>
+            <button id="chat-toggle">Ocultar</button>
+        </div>
+        <div id="chat-log"></div>
+        <input id="chat-input" maxlength="180" placeholder="Digite e pressione Enter">
+    </div>
+
+    <div id="skillbar-wrap" class="hud-skillbar hidden">
+        <button id="skill-basic" class="skill-icon skill-basic" title="Ataque basico">A</button>
+        <button class="skill-icon skill-burst" title="Disparo em area">B</button>
+        <button class="skill-icon skill-dash" title="Avanco">D</button>
+        <button class="skill-icon skill-guard" title="Postura defensiva">G</button>
+    </div>
+
+    <div id="menus-wrap" class="hud-menus hidden">
+        <button id="menu-attrs" class="menu-btn">Personagem (C)</button>
+        <button id="menu-inventory" class="menu-btn">Inventario (B)</button>
+        <button id="menu-map" class="menu-btn">Mapa (M)</button>
+    </div>
+
+    <div id="inventory-panel" class="panel hidden">
+        <div id="inventory-header">Inventario</div>
+        <div class="inventory-toolbar">
+            <button id="inventory-sort">Ordenar</button>
+            <div id="inventory-equipped-label">Arma equipada: nenhuma</div>
+        </div>
+        <div id="inventory-grid"></div>
+        <div id="inventory-hint">Arraste itens para mover. Arraste para fora para excluir.</div>
+    </div>
+
+    <div id="delete-confirm" class="panel hidden">
+        <div id="delete-confirm-title">deseja excluir o item?</div>
+        <div class="confirm-actions">
+            <button id="delete-confirm-yes">Sim</button>
+            <button id="delete-confirm-no">Nao</button>
+        </div>
+    </div>
+
+    <div id="item-tooltip" class="panel hidden"></div>
+
+    <div id="admin-panel" class="panel hidden">
+        <div id="admin-header">Painel ADM (H)</div>
+        <div id="admin-help">setstatus {id} {quantia} {jogador}</div>
+        <input id="admin-command" placeholder="setstatus 1 100 sena">
+        <button id="admin-send">Executar</button>
+        <div id="admin-result"></div>
+    </div>
+
     <canvas id="gameCanvas" style="display:none;"></canvas>
     <script type="module" src="js/main.js"></script>
 </body>

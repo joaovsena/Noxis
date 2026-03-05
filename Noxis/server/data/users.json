@@ -1,0 +1,300 @@
+{
+  "users": {
+    "sena": {
+      "passwordHash": "07450f3852be7b86693371bd6f7960d197a1cdc88a0f55d6215c266887db397c",
+      "salt": "1a55eaa036d22bf1fa6489ba1370d527",
+      "profile": {
+        "name": "sena",
+        "class": "knight",
+        "gender": "male",
+        "level": 14,
+        "xp": 480,
+        "hp": 140,
+        "baseStats": {
+          "physicalAttack": 10,
+          "magicAttack": 5,
+          "physicalDefense": 10,
+          "magicDefense": 10,
+          "moveSpeed": 100,
+          "attackSpeed": 100,
+          "attackRange": 58,
+          "damageType": "physical",
+          "maxHp": 140
+        },
+        "stats": {
+          "physicalAttack": 60,
+          "magicAttack": 41,
+          "physicalDefense": 23,
+          "magicDefense": 23,
+          "moveSpeed": 270,
+          "attackSpeed": 250,
+          "attackRange": 58,
+          "damageType": "physical",
+          "maxHp": 140
+        },
+        "inventory": [
+          {
+            "id": "12cfeab1-336b-45cf-b609-bb0f23317a45",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 716.7116380684623,
+            "y": 2570.55893622882,
+            "mapId": "world-1",
+            "slotIndex": 0
+          },
+          {
+            "id": "258ba836-1299-4739-9d52-df5a2e6781a5",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 1195.7930928095504,
+            "y": 2607.5658495142775,
+            "mapId": "world-1",
+            "slotIndex": 1
+          },
+          {
+            "id": "a99a54b5-560d-4e2f-8f87-67c3f83bd4db",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 150,
+              "attackSpeed": 150
+            },
+            "x": 1610.123685715727,
+            "y": 2824.3766710156783,
+            "mapId": "world-1",
+            "slotIndex": 12
+          },
+          {
+            "id": "cadcea95-7364-4d23-88fc-a794ca3b48a4",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 1143.5358706444354,
+            "y": 549.3507406935817,
+            "mapId": "world-1",
+            "slotIndex": 3
+          },
+          {
+            "id": "f1624f1d-0b3c-4574-903b-91ae79c256fc",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 150,
+              "attackSpeed": 150
+            },
+            "x": 3189.807762257487,
+            "y": 1607.396401440331,
+            "mapId": "world-1",
+            "slotIndex": 4
+          }
+        ],
+        "equippedWeaponId": "f1624f1d-0b3c-4574-903b-91ae79c256fc",
+        "role": "adm",
+        "statusOverrides": {
+          "physicalAttack": 50,
+          "moveSpeed": 120
+        }
+      }
+    },
+    "teste": {
+      "passwordHash": "670b4880a67ac298fea64a054c580ee643e2e6ad6bd419158f7e00dfe63d375b",
+      "salt": "6e6e09b3d8b14af16b42a76bd599e7e1",
+      "profile": {
+        "name": "teste",
+        "class": "shifter",
+        "gender": "male",
+        "level": 1,
+        "xp": 0,
+        "hp": 110,
+        "baseStats": {
+          "physicalAttack": 5,
+          "magicAttack": 15,
+          "physicalDefense": 5,
+          "magicDefense": 5,
+          "moveSpeed": 100,
+          "attackSpeed": 100,
+          "attackRange": 220,
+          "damageType": "magic",
+          "maxHp": 110
+        },
+        "stats": {
+          "physicalAttack": 5,
+          "magicAttack": 15,
+          "physicalDefense": 5,
+          "magicDefense": 5,
+          "moveSpeed": 100,
+          "attackSpeed": 100,
+          "attackRange": 220,
+          "damageType": "magic",
+          "maxHp": 110
+        }
+      }
+    },
+    "davi": {
+      "passwordHash": "8471492c79eee6a45982e98de6adb4db4ff5f6399c9da28adc45033411ad263b",
+      "salt": "61b2369407109bbc92f6bdac02d16624",
+      "profile": {
+        "name": "davi",
+        "class": "shifter",
+        "gender": "male",
+        "level": 2,
+        "xp": 110,
+        "hp": 110,
+        "baseStats": {
+          "physicalAttack": 5,
+          "magicAttack": 15,
+          "physicalDefense": 5,
+          "magicDefense": 5,
+          "moveSpeed": 100,
+          "attackSpeed": 100,
+          "attackRange": 220,
+          "damageType": "magic",
+          "maxHp": 110
+        },
+        "stats": {
+          "physicalAttack": 7,
+          "magicAttack": 17,
+          "physicalDefense": 6,
+          "magicDefense": 6,
+          "moveSpeed": 100,
+          "attackSpeed": 100,
+          "attackRange": 220,
+          "damageType": "magic",
+          "maxHp": 110
+        },
+        "inventory": [],
+        "role": "player",
+        "statusOverrides": {}
+      }
+    },
+    "coisasdemaua": {
+      "passwordHash": "ea465dd73594069945dd3cc5ea6f89a5d34ee32958685ca1910fa5493c784ab4",
+      "salt": "0a3c2cc602b18b905c56766ca474600a",
+      "profile": {
+        "name": "coisasdemaua",
+        "class": "bandit",
+        "gender": "male",
+        "level": 4,
+        "xp": 35,
+        "hp": 100,
+        "baseStats": {
+          "physicalAttack": 10,
+          "magicAttack": 5,
+          "physicalDefense": 5,
+          "magicDefense": 5,
+          "moveSpeed": 150,
+          "attackSpeed": 200,
+          "attackRange": 58,
+          "damageType": "physical",
+          "maxHp": 100
+        },
+        "stats": {
+          "physicalAttack": 26,
+          "magicAttack": 21,
+          "physicalDefense": 8,
+          "magicDefense": 8,
+          "moveSpeed": 200,
+          "attackSpeed": 250,
+          "attackRange": 58,
+          "damageType": "physical",
+          "maxHp": 100
+        },
+        "inventory": [
+          {
+            "id": "107f114a-2e74-4d14-9217-c3611dd11603",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 3680.9095180956715,
+            "y": 2334.088076750579,
+            "mapId": "world-1",
+            "slotIndex": 0
+          },
+          {
+            "id": "1908c8dd-5e6d-4a4d-9f1e-584f082f5605",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 1815.5265082356357,
+            "y": 3488.3231421545415,
+            "mapId": "world-1",
+            "slotIndex": 1
+          },
+          {
+            "id": "078c95f8-4539-4067-b0ac-2adb6d883eda",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 1869.00762294088,
+            "y": 3545.7233235982585,
+            "mapId": "world-1",
+            "slotIndex": 2
+          },
+          {
+            "id": "68799fd4-94e4-4e35-95f9-215fc4b0cf28",
+            "type": "weapon",
+            "name": "Arma Teste",
+            "slot": "weapon",
+            "bonuses": {
+              "physicalAttack": 10,
+              "magicAttack": 10,
+              "moveSpeed": 50,
+              "attackSpeed": 50
+            },
+            "x": 636.6297783543807,
+            "y": 2484.17128432928,
+            "mapId": "world-1",
+            "slotIndex": 3
+          }
+        ],
+        "equippedWeaponId": "107f114a-2e74-4d14-9217-c3611dd11603",
+        "role": "player",
+        "statusOverrides": {}
+      }
+    }
+  }
+}
