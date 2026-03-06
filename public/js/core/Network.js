@@ -140,6 +140,11 @@ export class Network {
             return;
         }
 
+        if (message.type === 'party.waypointPing') {
+            this.game.onPartyWaypointPing(message);
+            return;
+        }
+
         if (message.type === 'friend.state') {
             this.game.onFriendState(message);
             return;
@@ -167,6 +172,11 @@ export class Network {
 
         if (message.type === 'player.dead') {
             this.game.onPlayerDead(message);
+            return;
+        }
+
+        if (message.type === 'admin.mobPeacefulState') {
+            this.game.onAdminMobPeacefulState(message);
             return;
         }
     }

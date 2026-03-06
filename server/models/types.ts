@@ -14,7 +14,7 @@ export interface PlayerRuntime {
     allocatedStats: any;
     unspentPoints: number;
     statusOverrides: any;
-    pvpMode: 'peace' | 'evil';
+    pvpMode: 'peace' | 'group' | 'evil';
     role: string;
     inventory: any;
     equippedWeaponId: string | null;
@@ -37,6 +37,10 @@ export interface PlayerRuntime {
     deathY?: number;
     partyId?: string | null;
     skillCooldowns?: Record<string, number>;
+    movePath?: Array<{ x: number; y: number }>;
+    nextPathfindAt?: number;
+    pathDestinationX?: number;
+    pathDestinationY?: number;
 }
 
 export interface Mob {
@@ -62,6 +66,10 @@ export interface GroundItem {
     name: string;
     slot: string;
     bonuses: any;
+    quantity?: number;
+    stackable?: boolean;
+    maxStack?: number;
+    healPercent?: number;
     x: number;
     y: number;
     mapId: string;
@@ -125,6 +133,11 @@ export interface InventoryUnequipToSlotMessage {
     toSlot: number;
 }
 
+export interface ItemUseMessage {
+    type: 'item.use';
+    itemId: string;
+}
+
 export interface SwitchInstanceMessage {
     type: 'switch_instance';
     mapId: string;
@@ -133,6 +146,11 @@ export interface SwitchInstanceMessage {
 export interface AdminCommandMessage {
     type: 'admin_command';
     command: string;
+}
+
+export interface AdminSetMobPeacefulMessage {
+    type: 'admin.setMobPeaceful';
+    enabled: boolean;
 }
 
 export interface PartyCreateMessage {
@@ -185,6 +203,12 @@ export interface PartyApproveJoinMessage {
     accept: boolean;
 }
 
+export interface PartyWaypointPingMessage {
+    type: 'party.waypointPing';
+    x: number;
+    y: number;
+}
+
 export interface FriendRequestMessage {
     type: 'friend.request';
     targetPlayerId?: number;
@@ -222,7 +246,7 @@ export interface StatsAllocateMessage {
 
 export interface PlayerSetPvpModeMessage {
     type: 'player.setPvpMode';
-    mode: 'peace' | 'evil';
+    mode: 'peace' | 'group' | 'evil';
 }
 
 export interface CombatAttackMessage {
@@ -261,8 +285,10 @@ export type WSMessage =
     | InventorySortMessage
     | InventoryDeleteMessage
     | InventoryUnequipToSlotMessage
+    | ItemUseMessage
     | SwitchInstanceMessage
     | AdminCommandMessage
+    | AdminSetMobPeacefulMessage
     | PartyCreateMessage
     | PartyInviteMessage
     | PartyAcceptInviteMessage
@@ -273,6 +299,7 @@ export type WSMessage =
     | PartyRequestAreaPartiesMessage
     | PartyRequestJoinMessage
     | PartyApproveJoinMessage
+    | PartyWaypointPingMessage
     | FriendRequestMessage
     | FriendAcceptMessage
     | FriendDeclineMessage

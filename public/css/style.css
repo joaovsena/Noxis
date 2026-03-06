@@ -200,6 +200,10 @@ button:hover {
     min-height: 28px;
 }
 
+.equip-slot.hovered {
+    border-color: #f1c40f;
+}
+
 .equip-slot.filled {
     border-color: #c0392b;
     color: #ffb1aa;
@@ -346,10 +350,32 @@ button:hover {
     font-size: 12px;
 }
 
+.player-pvp-menu {
+    margin: 6px 0 4px;
+    display: grid;
+    gap: 4px;
+}
+
+.player-pvp-menu button {
+    padding: 5px 8px;
+    font-size: 12px;
+}
+
+.player-pvp-menu button.active {
+    border-color: #6c7ea0;
+    background: #2b3442;
+}
+
 #player-pvp-toggle.active-danger {
     border-color: #9d2f2f;
     background: #5a1f1f;
     color: #ffd9d9;
+}
+
+#player-pvp-toggle.active-group {
+    border-color: #3a6ca4;
+    background: #23466e;
+    color: #d8ecff;
 }
 
 .hp-wrap {
@@ -403,6 +429,34 @@ button:hover {
 .minimap-instance-bar label {
     color: #cad6e4;
     font-size: 12px;
+}
+
+.map-settings-toggle {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+    justify-self: end;
+}
+
+.map-settings-panel {
+    background: rgba(10, 15, 22, 0.96);
+    border: 1px solid #425265;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+.map-settings-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #d3deea;
+}
+
+.map-settings-line input {
+    margin: 0;
 }
 
 .hud-chat {
@@ -511,12 +565,49 @@ button:hover {
 
 .skill-slot-btn span {
     position: absolute;
-    right: 2px;
-    bottom: 1px;
+    right: 4px;
+    bottom: 2px;
     font-size: 10px;
     line-height: 1;
     color: #ece6d6;
     text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9);
+}
+
+.skill-slot-btn .slot-icon {
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -56%);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    color: #f6f2df;
+}
+
+.skill-slot-btn .slot-key {
+    right: 4px;
+    bottom: 2px;
+}
+
+.skill-slot-btn.slot-kind-empty .slot-icon {
+    opacity: 0;
+}
+
+.skill-slot-btn.slot-kind-action .slot-icon {
+    color: #ffd369;
+}
+
+.skill-slot-btn.slot-kind-item .slot-icon {
+    color: #b9f9ff;
+}
+
+.skill-slot-btn.slot-icon-potion .slot-icon {
+    color: #7ef6b2;
+}
+
+.skill-slot-btn.hovered {
+    border-color: #f1c40f;
 }
 
 .skill-slot-btn.pressed {
@@ -627,6 +718,22 @@ button:hover {
     font-size: 11px;
     cursor: grab;
     user-select: none;
+}
+
+.inv-item-qty {
+    position: absolute;
+    right: 2px;
+    bottom: 1px;
+    font-size: 10px;
+    line-height: 1;
+    color: #ffffff;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.9);
+    pointer-events: none;
+}
+
+.inv-item.item-type-potion_hp {
+    border-color: #1f9d55;
+    background: rgba(20, 120, 72, 0.4);
 }
 
 .inv-item.dragging {

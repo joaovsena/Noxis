@@ -86,6 +86,11 @@
                 <div id="player-name">-</div>
                 <button id="player-pvp-toggle" title="Modo PVP">Paz</button>
             </div>
+            <div id="player-pvp-menu" class="player-pvp-menu hidden">
+                <button class="pvp-mode-option" data-mode="peace">Paz</button>
+                <button class="pvp-mode-option" data-mode="group">Grupo</button>
+                <button class="pvp-mode-option" data-mode="evil">Mal</button>
+            </div>
             <div class="hp-wrap"><div id="player-hp-fill"></div></div>
             <div id="player-hp-text">HP: -</div>
         </div>
@@ -115,6 +120,21 @@
                 <option value="Z1">Z1</option>
                 <option value="Z2">Z2</option>
             </select>
+        </div>
+        <button id="map-settings-toggle" class="map-settings-toggle" title="Configuracoes">&#9881;</button>
+        <div id="map-settings-panel" class="map-settings-panel hidden">
+            <label class="map-settings-line">
+                <input id="auto-attack-toggle" type="checkbox" checked>
+                <span>Ataque automatico</span>
+            </label>
+            <label id="path-debug-setting" class="map-settings-line hidden">
+                <input id="path-debug-toggle" type="checkbox">
+                <span>Debug Path</span>
+            </label>
+            <label id="mob-peaceful-setting" class="map-settings-line hidden">
+                <input id="mob-peaceful-toggle" type="checkbox">
+                <span>Mobs pacificos</span>
+            </label>
         </div>
     </div>
 
@@ -239,7 +259,7 @@
             <div id="inventory-equipped-label">Arma equipada: nenhuma</div>
         </div>
         <div id="inventory-grid"></div>
-        <div id="inventory-hint">Arraste itens para mover. Arraste para fora para excluir.</div>
+        <div id="inventory-hint">Arraste para inventario/personagem/barra. Solte fora para excluir.</div>
     </div>
 
     <div id="delete-confirm" class="panel hidden">
@@ -287,4 +307,3 @@
     <script type="module" src="js/main.js"></script>
 </body>
 </html>
-

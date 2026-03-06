@@ -114,16 +114,16 @@ export const PORTALS_BY_MAP_KEY: Record<string, Array<{
     toY: number;
 }>> = {
     forest: [
-        // Portal da borda direita para o mapa de lava (zona rosa do layout).
-        { id: 'forest_to_lava_01', x: 3040, y: 1340, w: 120, h: 380, toMapKey: 'lava', toX: 260, toY: 1560 }
+        // Portal na ponta da estrada leste (ativacao pontual).
+        { id: 'forest_to_lava_01', x: 3053, y: 1821, w: 130, h: 130, toMapKey: 'lava', toX: 210, toY: 2286 }
     ],
     lava: [
-        // Corredor entre A1, A2 e A3.
-        { id: 'lava_to_forest_01', x: 40, y: 1340, w: 120, h: 380, toMapKey: 'forest', toX: 2940, toY: 1560 },
-        { id: 'lava_to_undead_01', x: 3040, y: 1300, w: 120, h: 420, toMapKey: 'undead', toX: 260, toY: 1520 }
+        // Corredor entre A1, A2 e A3 em pontos finais de estrada.
+        { id: 'lava_to_forest_01', x: 0, y: 2221, w: 130, h: 130, toMapKey: 'forest', toX: 3002, toY: 1886 },
+        { id: 'lava_to_undead_01', x: 3053, y: 2221, w: 130, h: 130, toMapKey: 'undead', toX: 210, toY: 2286 }
     ],
     undead: [
-        { id: 'undead_to_lava_01', x: 40, y: 1300, w: 120, h: 420, toMapKey: 'lava', toX: 2940, toY: 1560 }
+        { id: 'undead_to_lava_01', x: 0, y: 2221, w: 130, h: 130, toMapKey: 'lava', toX: 3002, toY: 2286 }
     ]
 };
 
@@ -159,6 +159,11 @@ export const WEAPON_TEMPLATE = {
         moveSpeed: 50,
         attackSpeed: 50
     }
+};
+export const HP_POTION_TEMPLATE = {
+    name: 'Pocao de HP',
+    slot: 'consumable',
+    healPercent: 0.5
 };
 export const STATUS_IDS = {
     physicalAttack: 1,

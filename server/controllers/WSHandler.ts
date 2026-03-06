@@ -58,11 +58,17 @@ export class WSHandler {
             case 'inventory_unequip_to_slot':
                 this.controller.handleInventoryUnequipToSlot(player, msg as any);
                 break;
+            case 'item.use':
+                this.controller.handleItemUse(player, msg as any);
+                break;
             case 'switch_instance':
                 this.controller.handleSwitchInstance(player, msg as any);
                 break;
             case 'admin_command':
                 void this.controller.handleAdminCommand(player, msg as any);
+                break;
+            case 'admin.setMobPeaceful':
+                this.controller.handleAdminSetMobPeaceful(player, msg as any);
                 break;
             case 'party.create':
                 this.controller.handlePartyCreate(player);
@@ -93,6 +99,9 @@ export class WSHandler {
                 break;
             case 'party.approveJoin':
                 this.controller.handlePartyApproveJoin(player, msg as any);
+                break;
+            case 'party.waypointPing':
+                this.controller.handlePartyWaypointPing(player, msg as any);
                 break;
             case 'friend.request':
                 this.controller.handleFriendRequest(player, msg as any);

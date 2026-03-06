@@ -38,6 +38,8 @@ export class Game {
         this.playerAvatar = document.getElementById('player-avatar');
         this.playerName = document.getElementById('player-name');
         this.playerPvpToggle = document.getElementById('player-pvp-toggle');
+        this.playerPvpMenu = document.getElementById('player-pvp-menu');
+        this.playerPvpOptions = [...document.querySelectorAll('.pvp-mode-option')];
         this.playerHpFill = document.getElementById('player-hp-fill');
         this.playerHpText = document.getElementById('player-hp-text');
         this.targetPlayerCard = document.getElementById('target-player-card');
@@ -52,6 +54,15 @@ export class Game {
         this.minimapCanvas = document.getElementById('minimap-canvas');
         this.minimapCtx = this.minimapCanvas.getContext('2d');
         this.mapCodeLabel = document.getElementById('map-code-label');
+        this.mapSettingsToggle = document.getElementById('map-settings-toggle');
+        this.mapSettingsPanel = document.getElementById('map-settings-panel');
+        this.autoAttackToggle = document.getElementById('auto-attack-toggle');
+        this.pathDebugSetting = document.getElementById('path-debug-setting');
+        this.pathDebugToggle = document.getElementById('path-debug-toggle');
+        this.mobPeacefulSetting = document.getElementById('mob-peaceful-setting');
+        this.mobPeacefulToggle = document.getElementById('mob-peaceful-toggle');
+        this.pathDebugEnabled = false;
+        this.mobPeacefulEnabled = false;
         if (this.mapCodeLabel) this.mapCodeLabel.textContent = `Mapa ${this.currentMapCode}`;
         this.worldmapPanel = document.getElementById('worldmap-panel');
         this.worldmapHeader = document.getElementById('worldmap-header');
@@ -107,12 +118,21 @@ export class Game {
         this.lastMoveAck = null;
         this.lastMoveSent = null;
         this.moveReqCounter = 0;
+        this.autoAttackEnabled = true;
+        this.localPlannedPath = [];
         this.chatBubbles = {};
         this.combatProjectiles = [];
 
         this.skillbarWrap = document.getElementById('skillbar-wrap');
         this.skillButtons = [...document.querySelectorAll('.skill-slot-btn')];
         this.skillButtonByKey = new Map(this.skillButtons.map((btn) => [String(btn.dataset.key || '').toLowerCase(), btn]));
+        this.hotbarBindings = {};
+        this.skillButtons.forEach((btn) => {
+            const key = String(btn.dataset.key || '').toLowerCase();
+            if (!key) return;
+            this.hotbarBindings[key] = null;
+        });
+        this.hotbarBindings['1'] = { type: 'action', actionId: 'basic_attack' };
         this.menuAttrs = document.getElementById('menu-attrs');
         this.menuInventory = document.getElementById('menu-inventory');
         this.instanceSelect = document.getElementById('instance-select');
@@ -156,6 +176,7 @@ export class Game {
         this.selectedAreaPartyId = null;
         this.pendingPartyInvites = [];
         this.pendingPartyJoinRequests = [];
+        this.partyWaypoints = [];
         this.friendsState = { friends: [], incoming: [], outgoing: [] };
         this.partyAreaPollTimer = null;
         this.partyNotifyExpiryTimer = null;
@@ -201,9 +222,13 @@ export class Game {
         this.setFriendsTab('list');
         this.renderFriendsPanel();
         this.renderFriendNotifications();
+        if (this.autoAttackToggle) this.autoAttackToggle.checked = this.autoAttackEnabled;
+        if (this.pathDebugToggle) this.pathDebugToggle.checked = this.pathDebugEnabled;
+        if (this.mobPeacefulToggle) this.mobPeacefulToggle.checked = this.mobPeacefulEnabled;
 
         this.started = false;
         this.setupEvents();
+        this.renderHotbar();
     }
 
     /**
@@ -241,13 +266,13 @@ export class Game {
             }
             const playerId = this.getPlayerAt(world.x, world.y);
             if (playerId) {
-                this.selectPlayerTarget(playerId, true);
+                this.selectPlayerTarget(playerId, this.autoAttackEnabled);
                 return;
             }
             const mobId = this.getMobAt(world.x, world.y);
 
             if (mobId) {
-                this.selectMobTarget(mobId, true);
+                this.selectMobTarget(mobId, this.autoAttackEnabled);
                 return;
             }
 
@@ -265,6 +290,7 @@ export class Game {
                 target.closest('#inventory-panel') ||
                 target.closest('#player-card') ||
                 target.closest('#minimap-wrap') ||
+                target.closest('#map-settings-panel') ||
                 target.closest('#worldmap-panel') ||
                 target.closest('#party-panel') ||
                 target.closest('#party-frames') ||
@@ -295,6 +321,7 @@ export class Game {
             const t = e.target;
             if (!t || typeof t.closest !== 'function') return;
             if (!t.closest('#target-player-card')) this.targetActionsMenu.classList.add('hidden');
+            if (!t.closest('#player-pvp-toggle') && !t.closest('#player-pvp-menu')) this.playerPvpMenu?.classList.add('hidden');
             if (isUiBlockedTarget(t)) return;
             if (t.closest('#gameCanvas')) return;
             sendMoveOrTarget(e.clientX, e.clientY);
@@ -367,10 +394,8 @@ export class Game {
             if (!btn) return;
             btn.classList.add('pressed');
             setTimeout(() => btn.classList.remove('pressed'), 110);
-            if (key === '1') {
-                e.preventDefault();
-                this.triggerPrimaryAttack();
-            }
+            e.preventDefault();
+            this.triggerHotbarKey(key);
         });
 
         window.addEventListener('keyup', (e) => {
@@ -429,9 +454,15 @@ export class Game {
             this.handleMinimapClick(e.clientX, e.clientY);
         });
         this.worldmapCanvas.addEventListener('pointerdown', (e) => {
-            if (e.button !== 0) return;
             if (!this.localId) return;
-            this.handleWorldMapClick(e.clientX, e.clientY);
+            if (e.button === 0) {
+                this.handleWorldMapClick(e.clientX, e.clientY);
+                return;
+            }
+            if (e.button === 1) {
+                e.preventDefault();
+                this.handleWorldMapWaypointPing(e.clientX, e.clientY);
+            }
         });
         this.worldmapClose.addEventListener('click', () => {
             this.worldmapPanel.classList.add('hidden');
@@ -446,18 +477,81 @@ export class Game {
             btn.addEventListener('click', () => {
                 btn.classList.add('pressed');
                 setTimeout(() => btn.classList.remove('pressed'), 110);
-                if (String(btn.dataset.key || '').toLowerCase() === '1') {
-                    this.triggerPrimaryAttack();
+                this.triggerHotbarKey(String(btn.dataset.key || '').toLowerCase());
+            });
+            btn.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                btn.classList.add('hovered');
+            });
+            btn.addEventListener('dragleave', () => btn.classList.remove('hovered'));
+            btn.addEventListener('drop', (e) => {
+                e.preventDefault();
+                btn.classList.remove('hovered');
+                const targetKey = String(btn.dataset.key || '').toLowerCase();
+                const payload = this.readDragPayload(e.dataTransfer);
+                if (!payload || !targetKey) return;
+                this.handleHotbarDrop(targetKey, payload);
+            });
+            btn.addEventListener('dragstart', (e) => {
+                const key = String(btn.dataset.key || '').toLowerCase();
+                if (!key) return;
+                const binding = this.hotbarBindings[key];
+                if (!binding) {
+                    e.preventDefault();
+                    return;
                 }
+                this.writeDragPayload(e.dataTransfer, { source: 'skillbar', key });
+            });
+            btn.addEventListener('dragend', () => {
+                btn.classList.remove('hovered');
             });
         });
 
         this.playerPvpToggle.addEventListener('click', () => {
             if (!this.localId || !this.players[this.localId]) return;
-            const currentMode = this.players[this.localId].pvpMode === 'evil' ? 'evil' : 'peace';
-            const nextMode = currentMode === 'evil' ? 'peace' : 'evil';
-            this.network.send({ type: 'player.setPvpMode', mode: nextMode });
+            if (!this.playerPvpMenu) return;
+            this.playerPvpMenu.classList.toggle('hidden');
         });
+        this.playerPvpOptions.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                if (!this.localId || !this.players[this.localId]) return;
+                const mode = String(btn.dataset.mode || 'peace');
+                this.network.send({ type: 'player.setPvpMode', mode });
+                if (this.playerPvpMenu) this.playerPvpMenu.classList.add('hidden');
+            });
+        });
+
+        if (this.mapSettingsToggle && this.mapSettingsPanel) {
+            this.mapSettingsToggle.addEventListener('click', () => {
+                this.mapSettingsPanel.classList.toggle('hidden');
+            });
+        }
+        if (this.autoAttackToggle) {
+            this.autoAttackToggle.addEventListener('change', () => {
+                this.autoAttackEnabled = Boolean(this.autoAttackToggle.checked);
+            });
+        }
+        if (this.pathDebugToggle) {
+            this.pathDebugToggle.addEventListener('change', () => {
+                if (this.playerRole !== 'adm') {
+                    this.pathDebugEnabled = false;
+                    this.pathDebugToggle.checked = false;
+                    return;
+                }
+                this.pathDebugEnabled = Boolean(this.pathDebugToggle.checked);
+            });
+        }
+        if (this.mobPeacefulToggle) {
+            this.mobPeacefulToggle.addEventListener('change', () => {
+                if (this.playerRole !== 'adm') {
+                    this.mobPeacefulEnabled = false;
+                    this.mobPeacefulToggle.checked = false;
+                    return;
+                }
+                this.mobPeacefulEnabled = Boolean(this.mobPeacefulToggle.checked);
+                this.network.send({ type: 'admin.setMobPeaceful', enabled: this.mobPeacefulEnabled });
+            });
+        }
 
         this.reviveBtn.addEventListener('click', () => {
             this.network.send({ type: 'player.revive' });
@@ -737,6 +831,7 @@ export class Game {
                 .join(' | ');
             this.adminStatusHelp.textContent = `setstatus {id} {quantia} {jogador} | ids: ${lines}`;
         }
+        this.updateAdminMapSettings();
         this.resize();
 
         if (!this.started) {
@@ -747,6 +842,7 @@ export class Game {
         this.renderPartyPanel();
         this.renderPartyFrames();
         this.renderPartyNotifications();
+        this.renderHotbar();
     }
 
     castPrimarySkill() {
@@ -780,6 +876,7 @@ export class Game {
         this.selectedAreaPartyId = null;
         this.pendingPartyInvites = [];
         this.pendingPartyJoinRequests = [];
+        this.partyWaypoints = [];
         this.friendsState = { friends: [], incoming: [], outgoing: [] };
         this.resetPendingStatAllocation();
         this.isDead = false;
@@ -798,6 +895,10 @@ export class Game {
      */
     onMoveAck(message) {
         this.lastMoveAck = message;
+        if (!this.localId || !this.players[this.localId]) return;
+        if (Array.isArray(message.pathNodes)) {
+            this.players[this.localId].pathNodes = message.pathNodes;
+        }
     }
 
     /**
@@ -807,6 +908,8 @@ export class Game {
         this.closeAllTooltips('inventory_state_commit');
         this.inventory = Array.isArray(message.inventory) ? message.inventory : [];
         this.equippedWeaponId = message.equippedWeaponId || null;
+        this.pruneInvalidHotbarItems();
+        this.renderHotbar();
         this.renderInventory();
         this.updatePanel();
     }
@@ -945,6 +1048,9 @@ export class Game {
         if (currentPartyId && currentPartyId !== previousPartyId) {
             this.pendingPartyInvites = [];
         }
+        if (currentPartyId !== previousPartyId) {
+            this.partyWaypoints = [];
+        }
         const nextSignature = this.buildPartyPanelSignature(this.partyState);
         const changed = nextSignature !== this.partyPanelSignature;
         this.partyPanelSignature = nextSignature;
@@ -1007,10 +1113,16 @@ export class Game {
         this.updateTargetPlayerCard();
     }
 
+    onAdminMobPeacefulState(message) {
+        const enabled = Boolean(message?.enabled);
+        this.mobPeacefulEnabled = enabled;
+        if (this.mobPeacefulToggle) this.mobPeacefulToggle.checked = enabled;
+    }
+
     onPlayerPvpModeUpdated(message) {
         const id = String(message.playerId || '');
         if (!id || !this.players[id]) return;
-        this.players[id].pvpMode = message.mode === 'evil' ? 'evil' : 'peace';
+        this.players[id].pvpMode = message.mode === 'evil' ? 'evil' : message.mode === 'group' ? 'group' : 'peace';
         this.updatePlayerCard();
         this.updateTargetPlayerCard();
     }
@@ -1039,6 +1151,25 @@ export class Game {
     onPartyJoinRequestResult(message) {
         const text = message?.message || (message?.ok ? 'Entrada no grupo aprovada.' : 'Solicitacao recusada.');
         this.onSystemMessage({ text });
+    }
+
+    onPartyWaypointPing(message) {
+        const waypointId = String(message.waypointId || '');
+        if (!waypointId) return;
+        const expiresIn = Number(message.expiresIn || 10000);
+        const expiresAt = Date.now() + Math.max(1, expiresIn);
+        this.partyWaypoints = this.partyWaypoints.filter((it) => it.waypointId !== waypointId);
+        this.partyWaypoints.push({
+            waypointId,
+            partyId: String(message.partyId || ''),
+            fromPlayerId: Number(message.fromPlayerId),
+            fromName: String(message.fromName || 'Grupo'),
+            mapKey: String(message.mapKey || this.currentMapKey || ''),
+            mapId: String(message.mapId || this.currentMapId || ''),
+            x: Number(message.x) || 0,
+            y: Number(message.y) || 0,
+            expiresAt
+        });
     }
 
     resolvePartyInvite(invite, accept) {
@@ -1154,6 +1285,20 @@ export class Game {
         this.sendMoveToWorld(world.x, world.y);
     }
 
+    handleWorldMapWaypointPing(clientX, clientY) {
+        if (!this.partyState || !this.partyState.id) {
+            this.onSystemMessage({ text: 'Voce precisa estar em um grupo para marcar waypoint.' });
+            return;
+        }
+        const worldRect = { x: 0, y: 0, w: this.mapWidth, h: this.mapHeight };
+        const world = this.worldFromCanvasClient(this.worldmapCanvas, clientX, clientY, worldRect);
+        this.network.send({
+            type: 'party.waypointPing',
+            x: world.x,
+            y: world.y
+        });
+    }
+
     /**
      * Retorna item no chão sob o cursor.
      */
@@ -1210,7 +1355,13 @@ export class Game {
         this.targetActionsMenu.classList.add('hidden');
         this.updateTargetPlayerCard();
         const me = this.localId ? this.players[this.localId] : null;
-        if (activateCombat && me && me.pvpMode === 'evil' && !this.isDead) {
+        const target = this.players[playerId];
+        if (activateCombat && me && target && !this.isDead) {
+            const allowed = this.canStartPvpAgainstTarget(me, target, true);
+            if (!allowed.ok) {
+                this.onSystemMessage({ text: allowed.reason || 'Nao pode atacar esse alvo.' });
+                return;
+            }
             this.network.send({ type: 'combat.targetPlayer', targetPlayerId: Number(playerId) });
         }
     }
@@ -1219,6 +1370,32 @@ export class Game {
         this.selectedPlayerId = null;
         this.targetActionsMenu.classList.add('hidden');
         this.targetPlayerCard.classList.add('hidden');
+    }
+
+    canStartPvpAgainstTarget(me, target, strictMode = false) {
+        if (!me || !target) return { ok: false, reason: 'Alvo invalido.' };
+        if (this.isTargetInMyParty(target.id)) return { ok: false, reason: 'Nao pode atacar membro do seu grupo.' };
+        const mode = me.pvpMode === 'evil' ? 'evil' : me.pvpMode === 'group' ? 'group' : 'peace';
+        const targetMode = target.pvpMode === 'evil' ? 'evil' : target.pvpMode === 'group' ? 'group' : 'peace';
+        if (mode === 'peace') return { ok: false, reason: 'Modo Paz ativo: voce nao pode atacar jogadores.' };
+        if (mode === 'group') {
+            if (!this.partyState) return { ok: false, reason: 'Modo Grupo exige estar em grupo.' };
+            if (targetMode !== 'group') return { ok: false, reason: 'Modo Grupo so ataca jogadores no modo Grupo.' };
+            return { ok: true };
+        }
+        if (mode === 'evil') {
+            if (strictMode && targetMode === 'evil') return { ok: false, reason: 'Modo Mal ataca apenas alvos em Paz ou Grupo.' };
+            return { ok: true };
+        }
+        return { ok: false, reason: 'Modo de combate invalido.' };
+    }
+
+    isTargetInMyParty(targetPlayerId) {
+        return Boolean(
+            this.partyState &&
+            Array.isArray(this.partyState.members) &&
+            this.partyState.members.some((m) => Number(m.playerId) === Number(targetPlayerId))
+        );
     }
 
     selectNearestTarget() {
@@ -1276,8 +1453,11 @@ export class Game {
 
         if (this.selectedPlayerId && this.players[this.selectedPlayerId]) {
             const me = this.players[this.localId];
-            if (!me || me.pvpMode !== 'evil') {
-                this.onSystemMessage({ text: 'Modo Paz ativo: voce nao pode atacar jogadores.' });
+            const target = this.players[this.selectedPlayerId];
+            if (!me || !target) return;
+            const allowed = this.canStartPvpAgainstTarget(me, target, true);
+            if (!allowed.ok) {
+                this.onSystemMessage({ text: allowed.reason || 'Nao pode atacar esse alvo.' });
                 return;
             }
             this.network.send({ type: 'combat.targetPlayer', targetPlayerId: Number(this.selectedPlayerId) });
@@ -1285,6 +1465,132 @@ export class Game {
         }
 
         this.onSystemMessage({ text: 'Selecione um alvo com a tecla \'.' });
+    }
+
+    triggerHotbarKey(key) {
+        if (!key) return;
+        const binding = this.hotbarBindings[key] || null;
+        if (!binding) return;
+        if (binding.type === 'action' && binding.actionId === 'basic_attack') {
+            this.triggerPrimaryAttack();
+            return;
+        }
+        if (binding.type === 'item') {
+            const item = this.inventory.find((it) => String(it.id) === String(binding.itemId));
+            if (!item) {
+                this.hotbarBindings[key] = null;
+                this.renderHotbar();
+                return;
+            }
+            this.network.send({ type: 'item.use', itemId: item.id });
+        }
+    }
+
+    normalizeHotbarBinding(binding) {
+        if (!binding || typeof binding !== 'object') return null;
+        if (binding.type === 'action' && binding.actionId === 'basic_attack') {
+            return { type: 'action', actionId: 'basic_attack' };
+        }
+        if (binding.type === 'item' && binding.itemId) {
+            return { type: 'item', itemId: String(binding.itemId) };
+        }
+        return null;
+    }
+
+    renderHotbar() {
+        this.skillButtons.forEach((btn) => {
+            const key = String(btn.dataset.key || '').toLowerCase();
+            const binding = this.hotbarBindings[key] || null;
+            const keyLabel = String(btn.dataset.key || '').toUpperCase();
+            let icon = '';
+            let title = keyLabel;
+            btn.classList.remove('slot-kind-action', 'slot-kind-item', 'slot-kind-empty', 'slot-icon-attack', 'slot-icon-potion');
+
+            if (binding?.type === 'action' && binding.actionId === 'basic_attack') {
+                icon = 'ATK';
+                title = 'Ataque Basico';
+                btn.classList.add('slot-kind-action', 'slot-icon-attack');
+            } else if (binding?.type === 'item') {
+                const item = this.inventory.find((it) => String(it.id) === String(binding.itemId));
+                if (!item) {
+                    this.hotbarBindings[key] = null;
+                    btn.classList.add('slot-kind-empty');
+                } else {
+                    icon = String(item.type || '') === 'potion_hp' ? 'HP' : 'IT';
+                    title = item.name || 'Item';
+                    btn.classList.add('slot-kind-item');
+                    if (String(item.type || '') === 'potion_hp') btn.classList.add('slot-icon-potion');
+                }
+            } else {
+                btn.classList.add('slot-kind-empty');
+            }
+
+            btn.draggable = Boolean(binding);
+            btn.title = title;
+            btn.innerHTML = `<span class="slot-icon">${icon}</span><span class="slot-key">${keyLabel}</span>`;
+        });
+    }
+
+    pruneInvalidHotbarItems() {
+        const itemIds = new Set(this.inventory.map((it) => String(it.id)));
+        for (const key of Object.keys(this.hotbarBindings)) {
+            const binding = this.hotbarBindings[key];
+            if (!binding || binding.type !== 'item') continue;
+            if (!itemIds.has(String(binding.itemId))) this.hotbarBindings[key] = null;
+        }
+    }
+
+    handleHotbarDrop(targetKey, payload) {
+        if (!targetKey) return;
+        if (payload.source === 'skillbar' && payload.key) {
+            const fromKey = String(payload.key).toLowerCase();
+            if (!Object.prototype.hasOwnProperty.call(this.hotbarBindings, fromKey) || !Object.prototype.hasOwnProperty.call(this.hotbarBindings, targetKey)) return;
+            const fromBinding = this.normalizeHotbarBinding(this.hotbarBindings[fromKey]);
+            const toBinding = this.normalizeHotbarBinding(this.hotbarBindings[targetKey]);
+            this.hotbarBindings[targetKey] = fromBinding;
+            this.hotbarBindings[fromKey] = toBinding;
+            this.renderHotbar();
+            return;
+        }
+
+        const itemId = payload.itemId ? String(payload.itemId) : '';
+        if (!itemId) return;
+        const currentTarget = this.hotbarBindings[targetKey];
+        if (currentTarget?.type === 'action' && currentTarget.actionId === 'basic_attack') {
+            this.onSystemMessage({ text: 'Mova o Ataque Basico para outro slot antes de colocar item aqui.' });
+            return;
+        }
+        const item = this.inventory.find((it) => String(it.id) === itemId);
+        if (!item) return;
+        this.hotbarBindings[targetKey] = { type: 'item', itemId };
+        this.renderHotbar();
+    }
+
+    writeDragPayload(dataTransfer, payload) {
+        if (!dataTransfer) return;
+        try {
+            dataTransfer.setData('application/x-noxis-drag', JSON.stringify(payload));
+        } catch {
+            // noop
+        }
+        if (payload?.itemId) dataTransfer.setData('text/plain', String(payload.itemId));
+        dataTransfer.effectAllowed = 'move';
+    }
+
+    readDragPayload(dataTransfer) {
+        if (!dataTransfer) return null;
+        const raw = dataTransfer.getData('application/x-noxis-drag');
+        if (raw) {
+            try {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') return parsed;
+            } catch {
+                // noop
+            }
+        }
+        const itemId = dataTransfer.getData('text/plain');
+        if (itemId) return { source: 'inventory', itemId: String(itemId) };
+        return null;
     }
 
     normalizeAllocatedStats(raw) {
@@ -1326,7 +1632,7 @@ export class Game {
         const unspentPoints = Number.isFinite(Number(player.unspentPoints)) ? Math.max(0, Number(player.unspentPoints)) : 0;
         return {
             ...player,
-            pvpMode: player.pvpMode || 'peace',
+            pvpMode: player.pvpMode === 'evil' ? 'evil' : player.pvpMode === 'group' ? 'group' : 'peace',
             dead: Boolean(player.dead),
             allocatedStats: normalizedAllocated,
             unspentPoints,
@@ -1336,6 +1642,7 @@ export class Game {
             targetY: player.y,
             hitAnim: null,
             attackAnim: null,
+            pathNodes: Array.isArray(player.pathNodes) ? player.pathNodes : [],
             facing: 's',
             animMs: 0,
             animLastAt: Date.now(),
@@ -1414,7 +1721,7 @@ export class Game {
             p.level = Number.isFinite(Number(incoming.level)) ? Number(incoming.level) : p.level;
             p.hp = Number.isFinite(Number(incoming.hp)) ? Number(incoming.hp) : p.hp;
             p.maxHp = Number.isFinite(Number(incoming.maxHp)) ? Number(incoming.maxHp) : p.maxHp;
-            p.pvpMode = incoming.pvpMode || p.pvpMode || 'peace';
+            p.pvpMode = incoming.pvpMode === 'evil' ? 'evil' : incoming.pvpMode === 'group' ? 'group' : p.pvpMode || 'peace';
             p.dead = Boolean(incoming.dead || p.hp <= 0);
             p.xp = incoming.xp;
             p.xpToNext = incoming.xpToNext;
@@ -1422,6 +1729,7 @@ export class Game {
             p.stats = incoming.stats;
             p.allocatedStats = this.normalizeAllocatedStats(incoming.allocatedStats);
             p.unspentPoints = Number.isFinite(Number(incoming.unspentPoints)) ? Math.max(0, Number(incoming.unspentPoints)) : 0;
+            p.pathNodes = Array.isArray(incoming.pathNodes) ? incoming.pathNodes : [];
             p.targetX = incoming.x;
             p.targetY = incoming.y;
 
@@ -1430,6 +1738,7 @@ export class Game {
                 const nowDead = Boolean(p.dead || p.hp <= 0);
                 this.isDead = nowDead;
                 this.reviveOverlay.classList.toggle('hidden', !nowDead);
+                this.updateAdminMapSettings();
             }
         }
     }
@@ -1498,7 +1807,8 @@ export class Game {
             slotEl.addEventListener('drop', (e) => {
                 e.preventDefault();
                 slotEl.classList.remove('hovered');
-                const itemId = e.dataTransfer.getData('text/plain');
+                const payload = this.readDragPayload(e.dataTransfer);
+                const itemId = payload?.itemId ? String(payload.itemId) : '';
                 if (!itemId) return;
                 this.closeAllTooltips('inventory_drop');
                 if (this.draggingEquippedWeapon && this.draggingEquippedWeapon === itemId) {
@@ -1511,12 +1821,24 @@ export class Game {
             const item = bySlot.get(slot);
             if (item) {
                 const itemEl = document.createElement('div');
-                itemEl.className = 'inv-item';
+                itemEl.className = `inv-item item-type-${String(item.type || 'generic')}`;
                 if (item.id === this.equippedWeaponId) itemEl.style.borderColor = '#27ae60';
                 itemEl.draggable = true;
                 itemEl.textContent = item.name;
-                itemEl.title = `${item.name}\nPATK +${item.bonuses?.physicalAttack || 0}\nMATK +${item.bonuses?.magicAttack || 0}\nMS +${item.bonuses?.moveSpeed || 0}\nASPD +${item.bonuses?.attackSpeed || 0}%`;
+                const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+                if (quantity > 1) {
+                    const qtyEl = document.createElement('div');
+                    qtyEl.className = 'inv-item-qty';
+                    qtyEl.textContent = String(quantity);
+                    itemEl.appendChild(qtyEl);
+                }
+                if (String(item.type || '') === 'potion_hp') {
+                    itemEl.title = `${item.name}\nRecupera 50% do HP ao usar.\nQtd: ${quantity}`;
+                } else {
+                    itemEl.title = `${item.name}\nPATK +${item.bonuses?.physicalAttack || 0}\nMATK +${item.bonuses?.magicAttack || 0}\nMS +${item.bonuses?.moveSpeed || 0}\nASPD +${item.bonuses?.attackSpeed || 0}%`;
+                }
                 itemEl.addEventListener('dblclick', () => {
+                    if (String(item.type || '') !== 'weapon') return;
                     this.closeAllTooltips('item_equipped');
                     this.network.send({ type: 'equip_item', itemId: item.id === this.equippedWeaponId ? null : item.id });
                 });
@@ -1530,14 +1852,20 @@ export class Game {
                     this.closeAllTooltips('inventory_drag_start');
                     this.inventoryDrag = { itemId: item.id };
                     itemEl.classList.add('dragging');
-                    e.dataTransfer.setData('text/plain', item.id);
+                    this.writeDragPayload(e.dataTransfer, { source: 'inventory', itemId: item.id });
                 });
                 itemEl.addEventListener('dragend', (e) => {
                     itemEl.classList.remove('dragging');
                     const x = e.clientX;
                     const y = e.clientY;
                     const target = document.elementFromPoint(x, y);
-                    const droppedInside = target && target.closest && target.closest('#inventory-grid');
+                    const droppedInside = Boolean(
+                        target && target.closest && (
+                            target.closest('#inventory-grid')
+                            || target.closest('#char-panel')
+                            || target.closest('#skillbar-wrap')
+                        )
+                    );
                     if (!droppedInside && this.inventoryDrag?.itemId === item.id) {
                         this.pendingDeleteItemId = item.id;
                         this.deleteConfirm.classList.remove('hidden');
@@ -1558,13 +1886,23 @@ export class Game {
         this.cancelTooltipTimers();
         this.tooltipState.activeTooltipId = item.id;
         this.tooltipState.lastOpenReason = reason;
-        this.tooltip.innerHTML = `
-            <div><strong>${item.name}</strong></div>
-            <div>PATK: +${item.bonuses?.physicalAttack || 0}</div>
-            <div>MATK: +${item.bonuses?.magicAttack || 0}</div>
-            <div>MSPD: +${item.bonuses?.moveSpeed || 0}</div>
-            <div>ASPD: +${item.bonuses?.attackSpeed || 0}%</div>
-        `;
+        if (String(item.type || '') === 'potion_hp') {
+            const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+            this.tooltip.innerHTML = `
+                <div><strong>${item.name}</strong></div>
+                <div>Consumivel</div>
+                <div>Restaura 50% do HP</div>
+                <div>Qtd: ${quantity}</div>
+            `;
+        } else {
+            this.tooltip.innerHTML = `
+                <div><strong>${item.name}</strong></div>
+                <div>PATK: +${item.bonuses?.physicalAttack || 0}</div>
+                <div>MATK: +${item.bonuses?.magicAttack || 0}</div>
+                <div>MSPD: +${item.bonuses?.moveSpeed || 0}</div>
+                <div>ASPD: +${item.bonuses?.attackSpeed || 0}%</div>
+            `;
+        }
         this.tooltip.style.left = `${clientX + 12}px`;
         this.tooltip.style.top = `${clientY + 12}px`;
         this.tooltip.classList.remove('hidden');
@@ -1656,7 +1994,7 @@ export class Game {
                 const equipped = this.inventory.find((it) => it.id === this.equippedWeaponId);
                 if (!equipped) return;
                 this.draggingEquippedWeapon = equipped.id;
-                e.dataTransfer.setData('text/plain', equipped.id);
+                this.writeDragPayload(e.dataTransfer, { source: 'equipment', itemId: equipped.id });
             };
             weaponSlot.ondragend = () => {
                 this.draggingEquippedWeapon = null;
@@ -1665,6 +2003,44 @@ export class Game {
             weaponSlot.draggable = false;
             weaponSlot.ondragstart = null;
             weaponSlot.ondragend = null;
+        }
+        if (weaponSlot) {
+            weaponSlot.ondragover = (e) => {
+                e.preventDefault();
+                weaponSlot.classList.add('hovered');
+            };
+            weaponSlot.ondragleave = () => {
+                weaponSlot.classList.remove('hovered');
+            };
+            weaponSlot.ondrop = (e) => {
+                e.preventDefault();
+                weaponSlot.classList.remove('hovered');
+                const payload = this.readDragPayload(e.dataTransfer);
+                const itemId = payload?.itemId ? String(payload.itemId) : '';
+                if (!itemId) return;
+                const item = this.inventory.find((it) => String(it.id) === itemId);
+                if (!item || String(item.type || '') !== 'weapon') return;
+                this.closeAllTooltips('item_equipped');
+                this.network.send({ type: 'equip_item', itemId });
+            };
+        }
+
+        if (this.panel) {
+            this.panel.ondragover = (e) => {
+                e.preventDefault();
+            };
+            this.panel.ondrop = (e) => {
+                const target = e.target;
+                if (target && target.closest && target.closest('.equip-slot[data-slot="weapon"]')) return;
+                e.preventDefault();
+                const payload = this.readDragPayload(e.dataTransfer);
+                const itemId = payload?.itemId ? String(payload.itemId) : '';
+                if (!itemId) return;
+                const item = this.inventory.find((it) => String(it.id) === itemId);
+                if (!item || String(item.type || '') !== 'weapon') return;
+                this.closeAllTooltips('item_equipped');
+                this.network.send({ type: 'equip_item', itemId });
+            };
         }
 
         this.panelBody.innerHTML = '';
@@ -1787,9 +2163,13 @@ export class Game {
         const me = this.players[this.localId];
         this.applyClassAvatar(this.playerAvatar, me.class);
         this.playerName.textContent = me.name;
-        const mode = me.pvpMode === 'evil' ? 'evil' : 'peace';
-        this.playerPvpToggle.textContent = mode === 'evil' ? 'Mal' : 'Paz';
+        const mode = me.pvpMode === 'evil' ? 'evil' : me.pvpMode === 'group' ? 'group' : 'peace';
+        this.playerPvpToggle.textContent = mode === 'evil' ? 'Mal' : mode === 'group' ? 'Grupo' : 'Paz';
         this.playerPvpToggle.classList.toggle('active-danger', mode === 'evil');
+        this.playerPvpToggle.classList.toggle('active-group', mode === 'group');
+        this.playerPvpOptions.forEach((btn) => {
+            btn.classList.toggle('active', String(btn.dataset.mode || '') === mode);
+        });
         const hpPercent = me.maxHp > 0 ? me.hp / me.maxHp : 0;
         this.playerHpFill.style.width = `${Math.max(0, Math.min(1, hpPercent)) * 100}%`;
         this.playerHpText.textContent = `HP: ${me.hp}/${me.maxHp}`;
@@ -2113,6 +2493,89 @@ export class Game {
         if (!party) return 'none';
         const members = Array.isArray(party.members) ? party.members.map((m) => `${m.playerId}:${m.role}`).join('|') : '';
         return `${party.id}|${party.leaderId}|${party.maxMembers}|${members}`;
+    }
+
+    pruneExpiredPartyWaypoints(now = Date.now()) {
+        this.partyWaypoints = this.partyWaypoints.filter((it) => Number(it.expiresAt) > now);
+    }
+
+    drawPlannedPathOnPreview(ctx, worldRect, sx, sy) {
+        if (!this.localId || !this.players[this.localId]) return;
+        const me = this.players[this.localId];
+        const nodes = Array.isArray(me.pathNodes) && me.pathNodes.length
+            ? me.pathNodes
+            : Array.isArray(this.lastMoveAck?.pathNodes)
+                ? this.lastMoveAck.pathNodes
+                : [];
+        if (!nodes.length) return;
+        const points = [{ x: me.x, y: me.y }, ...nodes];
+        ctx.strokeStyle = 'rgba(123, 230, 255, 0.95)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        let started = false;
+        for (const point of points) {
+            const px = (point.x - worldRect.x) * sx;
+            const py = (point.y - worldRect.y) * sy;
+            if (!started) {
+                ctx.moveTo(px, py);
+                started = true;
+                continue;
+            }
+            ctx.lineTo(px, py);
+        }
+        if (started) ctx.stroke();
+    }
+
+    drawDebugPathOnPreview(ctx, worldRect, sx, sy) {
+        if (!this.pathDebugEnabled || this.playerRole !== 'adm') return;
+        if (!this.localId || !this.players[this.localId]) return;
+        const me = this.players[this.localId];
+
+        for (const feature of this.mapFeatures || []) {
+            if (!feature || !feature.collision) continue;
+            ctx.strokeStyle = 'rgba(255, 70, 70, 0.95)';
+            ctx.lineWidth = 1;
+            if (feature.shape === 'rect') {
+                const x = (Number(feature.x) - worldRect.x) * sx;
+                const y = (Number(feature.y) - worldRect.y) * sy;
+                const w = Number(feature.w) * sx;
+                const h = Number(feature.h) * sy;
+                ctx.strokeRect(x, y, w, h);
+            } else if (feature.shape === 'circle') {
+                ctx.beginPath();
+                ctx.arc(
+                    (Number(feature.x) - worldRect.x) * sx,
+                    (Number(feature.y) - worldRect.y) * sy,
+                    Number(feature.r) * Math.min(sx, sy),
+                    0,
+                    Math.PI * 2
+                );
+                ctx.stroke();
+            }
+        }
+
+        const nodes = Array.isArray(me.pathNodes) ? me.pathNodes : [];
+        for (const pt of nodes) {
+            const px = (pt.x - worldRect.x) * sx;
+            const py = (pt.y - worldRect.y) * sy;
+            ctx.fillStyle = 'rgba(255, 90, 220, 0.95)';
+            ctx.beginPath();
+            ctx.arc(px, py, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        if (this.lastMoveSent) {
+            const mx = (this.lastMoveSent.x - worldRect.x) * sx;
+            const my = (this.lastMoveSent.y - worldRect.y) * sy;
+            ctx.strokeStyle = 'rgba(80, 220, 255, 0.95)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(mx - 4, my - 4, 8, 8);
+        }
+
+        ctx.fillStyle = '#ffd36f';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`NODES: ${nodes.length}`, 6, 12);
     }
 
     /**
@@ -2594,6 +3057,32 @@ export class Game {
             ctx.arc((p.x - worldRect.x) * sx, (p.y - worldRect.y) * sy, 2.8, 0, Math.PI * 2);
             ctx.fill();
         }
+
+        this.pruneExpiredPartyWaypoints();
+        for (const ping of this.partyWaypoints) {
+            if (ping.mapKey !== this.currentMapKey || ping.mapId !== this.currentMapId) continue;
+            if (ping.x < worldRect.x || ping.x > worldRect.x + worldRect.w || ping.y < worldRect.y || ping.y > worldRect.y + worldRect.h) continue;
+            const px = (ping.x - worldRect.x) * sx;
+            const py = (ping.y - worldRect.y) * sy;
+            ctx.strokeStyle = '#f6d04d';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(px, py, 7, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(px - 5, py);
+            ctx.lineTo(px + 5, py);
+            ctx.moveTo(px, py - 5);
+            ctx.lineTo(px, py + 5);
+            ctx.stroke();
+            ctx.fillStyle = '#f6d04d';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(String(ping.fromName || 'Grupo'), px, py - 10);
+        }
+
+        this.drawPlannedPathOnPreview(ctx, worldRect, sx, sy);
+        this.drawDebugPathOnPreview(ctx, worldRect, sx, sy);
 
         if (drawCameraBox) {
             const camX = (this.camera.x - worldRect.x) * sx;
@@ -3265,6 +3754,90 @@ export class Game {
         this.combatProjectiles = alive;
     }
 
+    drawPathDebugOverlay() {
+        if (!this.pathDebugEnabled || this.playerRole !== 'adm') return;
+        const me = this.localId ? this.players[this.localId] : null;
+        if (!me) return;
+
+        this.ctx.save();
+
+        // Contorno das areas de colisao configuradas no mapa.
+        for (const feature of this.mapFeatures || []) {
+            if (!feature || !feature.collision) continue;
+            this.ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';
+            this.ctx.lineWidth = 2;
+            if (feature.shape === 'rect') {
+                this.ctx.strokeRect(
+                    Number(feature.x) - this.camera.x,
+                    Number(feature.y) - this.camera.y,
+                    Number(feature.w),
+                    Number(feature.h)
+                );
+            } else if (feature.shape === 'circle') {
+                this.ctx.beginPath();
+                this.ctx.arc(
+                    Number(feature.x) - this.camera.x,
+                    Number(feature.y) - this.camera.y,
+                    Number(feature.r),
+                    0,
+                    Math.PI * 2
+                );
+                this.ctx.stroke();
+            }
+        }
+
+        // Rota planejada recebida do servidor.
+        const nodes = Array.isArray(me.pathNodes) ? me.pathNodes : [];
+        if (nodes.length) {
+            const points = [{ x: me.x, y: me.y }, ...nodes];
+            this.ctx.strokeStyle = 'rgba(255, 90, 220, 0.95)';
+            this.ctx.lineWidth = 3;
+            this.ctx.beginPath();
+            points.forEach((pt, idx) => {
+                const sx = pt.x - this.camera.x;
+                const sy = pt.y - this.camera.y;
+                if (idx === 0) this.ctx.moveTo(sx, sy);
+                else this.ctx.lineTo(sx, sy);
+            });
+            this.ctx.stroke();
+
+            for (const pt of nodes) {
+                this.ctx.fillStyle = 'rgba(255, 90, 220, 0.95)';
+                this.ctx.beginPath();
+                this.ctx.arc(pt.x - this.camera.x, pt.y - this.camera.y, 3, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+        }
+
+        // Destino do ultimo clique enviado.
+        if (this.lastMoveSent) {
+            this.ctx.strokeStyle = 'rgba(80, 220, 255, 0.95)';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(
+                this.lastMoveSent.x - this.camera.x - 6,
+                this.lastMoveSent.y - this.camera.y - 6,
+                12,
+                12
+            );
+        }
+
+        this.ctx.fillStyle = '#ffd36f';
+        this.ctx.font = '12px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(`DEBUG PATH ON | NODES: ${nodes.length}`, this.canvas.width * 0.5, 18);
+        this.ctx.restore();
+    }
+
+    updateAdminMapSettings() {
+        const isAdmin = this.playerRole === 'adm';
+        if (this.pathDebugSetting) this.pathDebugSetting.classList.toggle('hidden', !isAdmin);
+        if (this.mobPeacefulSetting) this.mobPeacefulSetting.classList.toggle('hidden', !isAdmin);
+        if (!isAdmin) {
+            this.pathDebugEnabled = false;
+            if (this.pathDebugToggle) this.pathDebugToggle.checked = false;
+        }
+    }
+
     /**
      * Resolve direcao em 8 sentidos a partir do vetor de movimento.
      */
@@ -3297,6 +3870,7 @@ export class Game {
         this.updateTargetPlayerCard();
 
         this.drawMap();
+        this.drawPathDebugOverlay();
         this.drawMobs();
         this.drawGroundItems();
         this.drawPlayers();

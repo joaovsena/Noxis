@@ -34,7 +34,8 @@ import {
     MOB_AGGRO_RANGE,
     MOB_LEASH_RANGE,
     MOB_ATTACK_RANGE,
-    MOB_ATTACK_INTERVAL_MS
+    MOB_ATTACK_INTERVAL_MS,
+    HP_POTION_TEMPLATE
 } from '../config';
 import { logEvent } from '../utils/logger';
 
@@ -73,6 +74,13 @@ interface FriendRequestItem {
 
 const ALLOCATABLE_STATS = ['physicalAttack', 'magicAttack', 'physicalDefense', 'magicDefense'] as const;
 type AllocatableStat = typeof ALLOCATABLE_STATS[number];
+const PARTY_WAYPOINT_TTL_MS = 10000;
+const PATHFIND_CELL_SIZE = 12;
+const PATHFIND_MAX_ITERS = 220000;
+const PATH_RECALC_MS = 280;
+const PATH_PROBE_RADIUS = Math.max(8, PLAYER_HALF_SIZE - 6);
+const PATH_PLAN_RADIUS = PATH_PROBE_RADIUS + 1;
+const MOVE_COLLISION_PADDING = 4;
 
 export class GameController {
     private persistence: PersistenceService;
@@ -88,6 +96,7 @@ export class GameController {
     private friendRequestWindow: Map<number, number[]> = new Map();
     private lastPartySyncAt = 0;
     private lastFriendDbPruneAt = 0;
+    private mobsPeacefulMode = false;
 
     constructor(persistence: PersistenceService, mobService: MobService) {
         this.persistence = persistence;
@@ -129,6 +138,7 @@ export class GameController {
         }
 
         const baseStats = { ...CLASS_TEMPLATES[selectedClass as keyof typeof CLASS_TEMPLATES] };
+        const isSena = username === 'sena' || name.toLowerCase() === 'sena';
         const profile = {
             name,
             class: selectedClass,
@@ -137,7 +147,7 @@ export class GameController {
             xp: 0,
             hp: baseStats.maxHp,
             maxHp: baseStats.maxHp,
-            role: 'player',
+            role: isSena ? 'adm' : 'player',
             statusOverrides: {},
             pvpMode: 'peace',
             allocatedStats: {
@@ -205,6 +215,12 @@ export class GameController {
             ws.send(JSON.stringify(this.buildWorldSnapshot(player.mapId, player.mapKey)));
             this.sendPartyStateToPlayer(player, null);
             this.sendPartyAreaList(player);
+            if (player.role === 'adm') {
+                this.sendRaw(player.ws, {
+                    type: 'admin.mobPeacefulState',
+                    enabled: this.mobsPeacefulMode
+                });
+            }
             await this.hydrateFriendStateForPlayer(player);
             this.sendFriendState(player);
 
@@ -229,15 +245,20 @@ export class GameController {
         const allocatedStats = this.normalizeAllocatedStats(profile.allocatedStats);
         const unspentRaw = Number(profile.unspentPoints);
         const unspentPoints = Number.isInteger(unspentRaw) && unspentRaw > 0 ? unspentRaw : 0;
+        const isSena = String(username || '').toLowerCase() === 'sena' || String(profile?.name || '').toLowerCase() === 'sena';
         const runtime: PlayerRuntime = {
             ...profile,
             id,
             ws: null,
             username,
+            role: isSena ? 'adm' : profile?.role === 'adm' ? 'adm' : 'player',
             pvpMode: profile?.pvpMode === 'evil' ? 'evil' : 'peace',
             allocatedStats,
             unspentPoints,
-            inventory: this.normalizeInventorySlots(Array.isArray(profile.inventory) ? profile.inventory : []),
+            inventory: this.normalizeInventorySlots(
+                Array.isArray(profile.inventory) ? profile.inventory : [],
+                profile?.equippedWeaponId ? String(profile.equippedWeaponId) : null
+            ),
             mapKey,
             mapId,
             x: spawn.x,
@@ -255,7 +276,11 @@ export class GameController {
             deathX: spawn.x,
             deathY: spawn.y,
             partyId: null,
-            skillCooldowns: {}
+            skillCooldowns: {},
+            movePath: [],
+            nextPathfindAt: 0,
+            pathDestinationX: spawn.x,
+            pathDestinationY: spawn.y
         };
         this.recomputePlayerStats(runtime);
         return runtime;
@@ -274,13 +299,13 @@ export class GameController {
             clamp(Number.isFinite(incomingX) ? incomingX : player.x, 0, WORLD.width),
             clamp(Number.isFinite(incomingY) ? incomingY : player.y, 0, WORLD.height)
         );
-        player.targetX = projected.x;
-        player.targetY = projected.y;
+        this.assignPathTo(player, projected.x, projected.y);
         player.ws.send(JSON.stringify({
             type: 'move_ack',
             reqId: msg.reqId,
             targetX: player.targetX,
-            targetY: player.targetY
+            targetY: player.targetY,
+            pathNodes: Array.isArray(player.movePath) ? player.movePath : []
         }));
     }
 
@@ -291,6 +316,9 @@ export class GameController {
         if (!mob) {
             player.autoAttackActive = false;
             player.attackTargetId = null;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
             return;
         }
         player.pvpAutoAttackActive = false;
@@ -349,6 +377,9 @@ export class GameController {
         player.mapId = target;
         player.targetX = player.x;
         player.targetY = player.y;
+        player.movePath = [];
+        player.pathDestinationX = player.x;
+        player.pathDestinationY = player.y;
         player.attackTargetId = null;
         player.autoAttackActive = false;
         player.ws.send(JSON.stringify({ type: 'system_message', text: `Instancia alterada para ${target}.` }));
@@ -365,11 +396,13 @@ export class GameController {
             return;
         }
         if (distance(player, item) > ITEM_PICKUP_RANGE) return;
-        const freeSlot = this.firstFreeInventorySlot(player.inventory);
-        if (freeSlot === -1) return;
-
-        this.groundItems.splice(index, 1);
-        player.inventory.push({ ...item, slotIndex: freeSlot });
+        let remaining = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        remaining = this.addItemToInventory(player, item, remaining);
+        if (remaining <= 0) {
+            this.groundItems.splice(index, 1);
+        } else {
+            this.groundItems[index] = { ...item, quantity: remaining };
+        }
         this.persistPlayer(player);
         this.sendInventoryState(player);
     }
@@ -377,7 +410,14 @@ export class GameController {
     handleEquipItem(player: PlayerRuntime, msg: any) {
         const itemId = msg.itemId ? String(msg.itemId) : null;
         if (!itemId) {
+            const equipped = player.equippedWeaponId
+                ? player.inventory.find((it: any) => it.id === player.equippedWeaponId && it.type === 'weapon')
+                : null;
+            if (equipped && (!Number.isInteger(equipped.slotIndex) || equipped.slotIndex < 0)) {
+                equipped.slotIndex = this.firstFreeInventorySlot(player.inventory, new Set([equipped.id]));
+            }
             player.equippedWeaponId = null;
+            player.inventory = this.normalizeInventorySlots(player.inventory, null);
             this.recomputePlayerStats(player);
             this.persistPlayer(player);
             this.sendInventoryState(player);
@@ -386,8 +426,19 @@ export class GameController {
 
         const found = player.inventory.find((it: any) => it.id === itemId && it.type === 'weapon');
         if (!found) return;
+        const previousEquippedId = player.equippedWeaponId && player.equippedWeaponId !== found.id ? player.equippedWeaponId : null;
+        if (previousEquippedId) {
+            const oldEquipped = player.inventory.find((it: any) => it.id === previousEquippedId && it.type === 'weapon');
+            if (oldEquipped) {
+                oldEquipped.slotIndex = Number.isInteger(found.slotIndex) && found.slotIndex >= 0
+                    ? found.slotIndex
+                    : this.firstFreeInventorySlot(player.inventory, new Set([oldEquipped.id, found.id]));
+            }
+        }
+        found.slotIndex = -1;
 
         player.equippedWeaponId = found.id;
+        player.inventory = this.normalizeInventorySlots(player.inventory, player.equippedWeaponId);
         this.recomputePlayerStats(player);
         this.persistPlayer(player);
         this.sendInventoryState(player);
@@ -397,6 +448,7 @@ export class GameController {
         const itemId = String(msg.itemId || '');
         const toSlot = Number(msg.toSlot);
         if (!Number.isInteger(toSlot) || toSlot < 0 || toSlot >= INVENTORY_SIZE) return;
+        if (player.equippedWeaponId && player.equippedWeaponId === itemId) return;
 
         const item = player.inventory.find((it: any) => it.id === itemId);
         if (!item) return;
@@ -406,13 +458,16 @@ export class GameController {
         item.slotIndex = toSlot;
         if (occupant && occupant.id !== item.id) occupant.slotIndex = fromSlot;
 
-        player.inventory = this.normalizeInventorySlots(player.inventory);
+        player.inventory = this.normalizeInventorySlots(player.inventory, player.equippedWeaponId);
         this.persistPlayer(player);
         this.sendInventoryState(player);
     }
 
     handleInventorySort(player: PlayerRuntime) {
-        const sorted = [...player.inventory].sort((a: any, b: any) => {
+        const equippedId = player.equippedWeaponId || null;
+        const sorted = [...player.inventory]
+            .filter((it: any) => it.id !== equippedId)
+            .sort((a: any, b: any) => {
             const byName = String(a.name || '').localeCompare(String(b.name || ''));
             if (byName !== 0) return byName;
             return String(a.id).localeCompare(String(b.id));
@@ -420,7 +475,11 @@ export class GameController {
         for (let i = 0; i < sorted.length && i < INVENTORY_SIZE; i++) {
             sorted[i].slotIndex = i;
         }
-        player.inventory = this.normalizeInventorySlots(sorted);
+        if (equippedId) {
+            const equipped = player.inventory.find((it: any) => it.id === equippedId);
+            if (equipped) sorted.push({ ...equipped, slotIndex: -1 });
+        }
+        player.inventory = this.normalizeInventorySlots(sorted, player.equippedWeaponId);
         this.persistPlayer(player);
         this.sendInventoryState(player);
     }
@@ -434,7 +493,7 @@ export class GameController {
             this.recomputePlayerStats(player);
         }
         player.inventory.splice(index, 1);
-        player.inventory = this.normalizeInventorySlots(player.inventory);
+        player.inventory = this.normalizeInventorySlots(player.inventory, player.equippedWeaponId);
         this.persistPlayer(player);
         this.sendInventoryState(player);
     }
@@ -454,9 +513,34 @@ export class GameController {
         player.equippedWeaponId = null;
 
         this.recomputePlayerStats(player);
-        player.inventory = this.normalizeInventorySlots(player.inventory);
+        player.inventory = this.normalizeInventorySlots(player.inventory, player.equippedWeaponId);
         this.persistPlayer(player);
         this.sendInventoryState(player);
+    }
+
+    handleItemUse(player: PlayerRuntime, msg: any) {
+        if (player.dead || player.hp <= 0) return;
+        const itemId = String(msg?.itemId || '');
+        if (!itemId) return;
+        const index = player.inventory.findIndex((it: any) => String(it?.id || '') === itemId);
+        if (index === -1) return;
+        const item = player.inventory[index];
+        if (String(item?.type || '') !== 'potion_hp') return;
+
+        const healPercent = Number.isFinite(Number(item?.healPercent)) ? Number(item.healPercent) : Number(HP_POTION_TEMPLATE.healPercent || 0.5);
+        const amount = Math.max(1, Math.floor(Number(player.maxHp || 1) * Math.max(0, healPercent)));
+        player.hp = clamp(Number(player.hp || 0) + amount, 1, Number(player.maxHp || 1));
+        const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        if (quantity > 1) {
+            item.quantity = quantity - 1;
+        } else {
+            player.inventory.splice(index, 1);
+        }
+        player.inventory = this.normalizeInventorySlots(player.inventory, player.equippedWeaponId);
+
+        this.persistPlayer(player);
+        this.sendInventoryState(player);
+        this.sendStatsUpdated(player);
     }
 
     async handleAdminCommand(player: PlayerRuntime, msg: any) {
@@ -493,7 +577,7 @@ export class GameController {
             target.statusOverrides[key] = safeCurrentOverride + value;
             this.recomputePlayerStats(target);
             this.persistPlayer(target);
-            this.sendInventoryState(target);
+            this.sendStatsUpdated(target);
             const total = Number(target.stats?.[key]);
             const safeTotal = Number.isFinite(total) ? total : target.statusOverrides[key];
             this.sendRaw(player.ws, {
@@ -546,6 +630,9 @@ export class GameController {
             target.y = projected.y;
             target.targetX = target.x;
             target.targetY = target.y;
+            target.movePath = [];
+            target.pathDestinationX = target.x;
+            target.pathDestinationY = target.y;
             target.attackTargetId = null;
             target.autoAttackActive = false;
             target.attackTargetPlayerId = null;
@@ -578,6 +665,9 @@ export class GameController {
             player.y = projected.y;
             player.targetX = player.x;
             player.targetY = player.y;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
             player.attackTargetId = null;
             player.autoAttackActive = false;
             player.attackTargetPlayerId = null;
@@ -609,6 +699,9 @@ export class GameController {
             target.y = projected.y;
             target.targetX = target.x;
             target.targetY = target.y;
+            target.movePath = [];
+            target.pathDestinationX = target.x;
+            target.pathDestinationY = target.y;
             target.attackTargetId = null;
             target.autoAttackActive = false;
             target.attackTargetPlayerId = null;
@@ -653,7 +746,7 @@ export class GameController {
                 });
                 added += 1;
             }
-            target.inventory = this.normalizeInventorySlots(target.inventory);
+            target.inventory = this.normalizeInventorySlots(target.inventory, target.equippedWeaponId || null);
             this.persistPlayer(target);
             this.sendInventoryState(target);
             this.sendRaw(player.ws, {
@@ -867,6 +960,15 @@ export class GameController {
         const target = this.players.get(targetPlayerId);
         if (target) {
             target.partyId = null;
+            if (target.pvpMode === 'group') {
+                target.pvpMode = 'peace';
+                this.broadcastRaw({
+                    type: 'player.pvpModeUpdated',
+                    playerId: target.id,
+                    mode: 'peace'
+                });
+                this.persistPlayer(target);
+            }
             this.sendPartyStateToPlayer(target, null);
         }
         party.memberIds = party.memberIds.filter((id) => id !== targetPlayerId);
@@ -1001,6 +1103,43 @@ export class GameController {
         this.syncPartyStateForMembers(party, true);
         this.sendRaw(requester.ws, { type: 'party.joinRequestResult', ok: true, message: 'Entrada no grupo aprovada.' });
         this.sendRaw(player.ws, { type: 'system_message', text: `${requester.name} entrou no grupo.` });
+    }
+
+    handlePartyWaypointPing(player: PlayerRuntime, msg: any) {
+        const party = player.partyId ? this.parties.get(player.partyId) : null;
+        if (!party) {
+            this.sendPartyError(player, 'Voce precisa estar em grupo para marcar waypoint.');
+            return;
+        }
+        if (!party.memberIds.includes(player.id)) {
+            return;
+        }
+        const x = Number(msg?.x);
+        const y = Number(msg?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return;
+        }
+        const waypointX = clamp(x, 0, WORLD.width);
+        const waypointY = clamp(y, 0, WORLD.height);
+        const createdAt = Date.now();
+        const payload = {
+            type: 'party.waypointPing',
+            waypointId: randomUUID(),
+            partyId: party.id,
+            fromPlayerId: player.id,
+            fromName: player.name,
+            mapKey: player.mapKey,
+            mapId: player.mapId,
+            x: waypointX,
+            y: waypointY,
+            createdAt,
+            expiresIn: PARTY_WAYPOINT_TTL_MS
+        };
+        for (const memberId of party.memberIds) {
+            const member = this.players.get(memberId);
+            if (!member) continue;
+            this.sendRaw(member.ws, payload);
+        }
     }
 
     async handleFriendRequest(player: PlayerRuntime, msg: any) {
@@ -1150,11 +1289,36 @@ export class GameController {
         this.sendFriendState(player);
     }
 
+    handleAdminSetMobPeaceful(player: PlayerRuntime, msg: any) {
+        if (player.role !== 'adm') return;
+        this.mobsPeacefulMode = Boolean(msg?.enabled);
+        for (const mob of this.mobService.getMobs()) {
+            mob.targetPlayerId = null;
+            mob.lastAttackAt = 0;
+        }
+        for (const receiver of this.players.values()) {
+            if (receiver.role !== 'adm') continue;
+            this.sendRaw(receiver.ws, {
+                type: 'admin.mobPeacefulState',
+                enabled: this.mobsPeacefulMode
+            });
+        }
+        this.sendRaw(player.ws, {
+            type: 'system_message',
+            text: this.mobsPeacefulMode ? 'Modo pacifico de mobs ativado.' : 'Modo pacifico de mobs desativado.'
+        });
+    }
+
     handleSetPvpMode(player: PlayerRuntime, msg: any) {
-        const mode = msg?.mode === 'evil' ? 'evil' : 'peace';
+        const rawMode = String(msg?.mode || 'peace');
+        const mode = rawMode === 'evil' ? 'evil' : rawMode === 'group' ? 'group' : 'peace';
+        if (mode === 'group' && (!player.partyId || !this.parties.has(player.partyId))) {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Modo Grupo exige estar em grupo.' });
+            return;
+        }
         if (player.pvpMode === mode) return;
         player.pvpMode = mode;
-        if (mode !== 'evil') {
+        if (mode === 'peace') {
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
         }
@@ -1173,6 +1337,11 @@ export class GameController {
         const target = this.players.get(targetPlayerId);
         if (!target || target.dead || target.hp <= 0) return;
         if (player.mapId !== target.mapId || player.mapKey !== target.mapKey) return;
+        const permission = this.getPvpAttackPermission(player, target);
+        if (!permission.ok) {
+            this.sendRaw(player.ws, { type: 'system_message', text: permission.reason || 'Nao pode atacar esse alvo.' });
+            return;
+        }
         player.pvpAutoAttackActive = true;
         player.attackTargetPlayerId = targetPlayerId;
         player.autoAttackActive = false;
@@ -1182,6 +1351,9 @@ export class GameController {
     handleCombatClearTarget(player: PlayerRuntime) {
         player.pvpAutoAttackActive = false;
         player.attackTargetPlayerId = null;
+        player.movePath = [];
+        player.pathDestinationX = player.x;
+        player.pathDestinationY = player.y;
     }
 
     handleCombatAttack(player: PlayerRuntime, msg: any) {
@@ -1207,6 +1379,9 @@ export class GameController {
         player.y = projected.y;
         player.targetX = player.x;
         player.targetY = player.y;
+        player.movePath = [];
+        player.pathDestinationX = player.x;
+        player.pathDestinationY = player.y;
         player.autoAttackActive = false;
         player.attackTargetId = null;
         player.pvpAutoAttackActive = false;
@@ -1258,6 +1433,7 @@ export class GameController {
                 if (mob.hp === 0) {
                     this.grantXp(player, mob.xpReward);
                     if (Math.random() < 0.5) this.dropWeaponAt(mob.x, mob.y, mapInstanceId);
+                    this.dropHpPotionAt(mob.x, mob.y, mapInstanceId);
                     this.mobService.removeMob(mob.id);
                 }
                 this.broadcastMobHit(player, mob);
@@ -1279,6 +1455,7 @@ export class GameController {
             if (targetMob.hp === 0) {
                 this.grantXp(player, targetMob.xpReward);
                 if (Math.random() < 0.5) this.dropWeaponAt(targetMob.x, targetMob.y, mapInstanceId);
+                this.dropHpPotionAt(targetMob.x, targetMob.y, mapInstanceId);
                 this.mobService.removeMob(targetMob.id);
             }
             player.lastCombatAt = now;
@@ -1299,6 +1476,7 @@ export class GameController {
         if (targetMob.hp === 0) {
             this.grantXp(player, targetMob.xpReward);
             if (Math.random() < 0.5) this.dropWeaponAt(targetMob.x, targetMob.y, mapInstanceId);
+            this.dropHpPotionAt(targetMob.x, targetMob.y, mapInstanceId);
             this.mobService.removeMob(targetMob.id);
         }
         player.lastCombatAt = now;
@@ -1360,7 +1538,7 @@ export class GameController {
         this.processMobAggroAndCombat(deltaSeconds, now);
         for (const player of this.players.values()) {
             if (player.dead || player.hp <= 0) continue;
-            this.movePlayerTowardTarget(player, deltaSeconds);
+            this.movePlayerTowardTarget(player, deltaSeconds, now);
             this.processPortalCollision(player, now);
             this.processAutoAttack(player, now);
             this.processAutoAttackPlayer(player, now);
@@ -1409,8 +1587,13 @@ export class GameController {
         this.clearFriendRequestsForPlayer(player.id);
     }
 
-    private firstFreeInventorySlot(items: any[]): number {
-        const used = new Set(items.map((it) => it.slotIndex).filter((n) => Number.isInteger(n)));
+    private firstFreeInventorySlot(items: any[], ignoreItemIds: Set<string> = new Set()): number {
+        const used = new Set(
+            items
+                .filter((it) => !ignoreItemIds.has(String(it?.id || '')))
+                .map((it) => it.slotIndex)
+                .filter((n) => Number.isInteger(n) && n >= 0)
+        );
         for (let i = 0; i < INVENTORY_SIZE; i++) {
             if (!used.has(i)) return i;
         }
@@ -1429,13 +1612,14 @@ export class GameController {
             y: player.y,
             mapKey: player.mapKey,
             mapId: player.mapId,
-            pvpMode: player.pvpMode || 'peace',
+            pvpMode: player.pvpMode === 'evil' ? 'evil' : player.pvpMode === 'group' ? 'group' : 'peace',
             dead: Boolean(player.dead || player.hp <= 0),
             role: player.role || 'player',
             level: player.level,
             hp: player.hp,
             maxHp: player.maxHp,
             equippedWeaponName: weapon ? weapon.name : null,
+            pathNodes: Array.isArray(player.movePath) ? player.movePath.slice(0, 40).map((pt: any) => ({ x: Number(pt.x), y: Number(pt.y) })) : [],
             xp: player.xp,
             xpToNext: xpRequired(player.level),
             stats: player.stats,
@@ -1444,20 +1628,55 @@ export class GameController {
         };
     }
 
-    private movePlayerTowardTarget(player: PlayerRuntime, deltaSeconds: number) {
+    private movePlayerTowardTarget(player: PlayerRuntime, deltaSeconds: number, now: number) {
+        if (Array.isArray(player.movePath) && player.movePath.length > 0) {
+            const next = player.movePath[0];
+            if (next) {
+                player.targetX = next.x;
+                player.targetY = next.y;
+            }
+        }
         const rawMoveSpeed = Number(player.stats?.moveSpeed);
         const moveSpeedStat = Number.isFinite(rawMoveSpeed) && rawMoveSpeed > 0 ? rawMoveSpeed : 100;
         const speed = BASE_MOVE_SPEED * (moveSpeedStat / 100);
         const dx = player.targetX - player.x;
         const dy = player.targetY - player.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= 0.01) return;
+        if (dist <= 2) {
+            if (Array.isArray(player.movePath) && player.movePath.length > 0) {
+                player.movePath.shift();
+                const next = player.movePath[0];
+                if (next) {
+                    player.targetX = next.x;
+                    player.targetY = next.y;
+                } else {
+                    player.targetX = player.x;
+                    player.targetY = player.y;
+                    player.pathDestinationX = player.x;
+                    player.pathDestinationY = player.y;
+                }
+            }
+            return;
+        }
 
         const step = speed * deltaSeconds;
         if (step >= dist) {
             if (!this.isBlockedAt(player.mapKey, player.targetX, player.targetY)) {
                 player.x = player.targetX;
                 player.y = player.targetY;
+            }
+            if (Array.isArray(player.movePath) && player.movePath.length > 0) {
+                player.movePath.shift();
+                const next = player.movePath[0];
+                if (next) {
+                    player.targetX = next.x;
+                    player.targetY = next.y;
+                } else {
+                    player.targetX = player.x;
+                    player.targetY = player.y;
+                    player.pathDestinationX = player.x;
+                    player.pathDestinationY = player.y;
+                }
             }
             return;
         }
@@ -1469,8 +1688,35 @@ export class GameController {
             player.y = nextY;
             return;
         }
-        player.targetX = player.x;
-        player.targetY = player.y;
+        // Fallback de deslizamento por eixo para evitar travar em quinas de colisao.
+        const axisX = player.x + (dx / dist) * step;
+        if (!this.isBlockedAt(player.mapKey, axisX, player.y)) {
+            player.x = axisX;
+            return;
+        }
+        const axisY = player.y + (dy / dist) * step;
+        if (!this.isBlockedAt(player.mapKey, player.x, axisY)) {
+            player.y = axisY;
+            return;
+        }
+        if (Array.isArray(player.movePath) && player.movePath.length > 0) {
+            player.movePath.shift();
+            const next = player.movePath[0];
+            if (next) {
+                player.targetX = next.x;
+                player.targetY = next.y;
+                return;
+            }
+        }
+        const destinationX = Number.isFinite(Number(player.pathDestinationX)) ? Number(player.pathDestinationX) : player.targetX;
+        const destinationY = Number.isFinite(Number(player.pathDestinationY)) ? Number(player.pathDestinationY) : player.targetY;
+        this.recalculatePathToward(player, destinationX, destinationY, now);
+        if (!Array.isArray(player.movePath) || player.movePath.length === 0) {
+            player.targetX = player.x;
+            player.targetY = player.y;
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
+        }
     }
 
     private processAutoAttack(player: PlayerRuntime, now: number) {
@@ -1480,6 +1726,9 @@ export class GameController {
         if (!mob) {
             player.autoAttackActive = false;
             player.attackTargetId = null;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
             return;
         }
 
@@ -1498,13 +1747,15 @@ export class GameController {
                 clamp(mob.x + (dx / norm) * desiredDistance, 0, WORLD.width),
                 clamp(mob.y + (dy / norm) * desiredDistance, 0, WORLD.height)
             );
-            player.targetX = projected.x;
-            player.targetY = projected.y;
+            this.recalculatePathToward(player, projected.x, projected.y, now);
             return;
         }
 
+        player.movePath = [];
         player.targetX = player.x;
         player.targetY = player.y;
+        player.pathDestinationX = player.x;
+        player.pathDestinationY = player.y;
 
         const rawAttackSpeed = Number(player.stats?.attackSpeed);
         const attackSpeedStat = Number.isFinite(rawAttackSpeed) && rawAttackSpeed > 0 ? rawAttackSpeed : 100;
@@ -1545,6 +1796,7 @@ export class GameController {
             if (Math.random() < 0.5) {
                 this.dropWeaponAt(mob.x, mob.y, this.mapInstanceId(player.mapKey, player.mapId));
             }
+            this.dropHpPotionAt(mob.x, mob.y, this.mapInstanceId(player.mapKey, player.mapId));
             this.mobService.removeMob(mob.id);
         }
     }
@@ -1580,20 +1832,30 @@ export class GameController {
 
     private processAutoAttackPlayer(player: PlayerRuntime, now: number) {
         if (!player.pvpAutoAttackActive || !player.attackTargetPlayerId) return;
-        if (player.pvpMode !== 'evil') {
-            player.pvpAutoAttackActive = false;
-            player.attackTargetPlayerId = null;
-            return;
-        }
         const target = this.players.get(player.attackTargetPlayerId);
         if (!target || target.dead || target.hp <= 0) {
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
             return;
         }
         if (player.mapId !== target.mapId || player.mapKey !== target.mapKey) {
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
+            return;
+        }
+        const permission = this.getPvpAttackPermission(player, target);
+        if (!permission.ok) {
+            player.pvpAutoAttackActive = false;
+            player.attackTargetPlayerId = null;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
             return;
         }
 
@@ -1610,17 +1872,26 @@ export class GameController {
                 clamp(target.x + (dx / norm) * desiredDistance, 0, WORLD.width),
                 clamp(target.y + (dy / norm) * desiredDistance, 0, WORLD.height)
             );
-            player.targetX = projected.x;
-            player.targetY = projected.y;
+            this.recalculatePathToward(player, projected.x, projected.y, now);
             return;
         }
+        player.movePath = [];
         player.targetX = player.x;
         player.targetY = player.y;
+        player.pathDestinationX = player.x;
+        player.pathDestinationY = player.y;
         this.tryPlayerAttack(player, target.id, now, true);
     }
 
     private processMobAggroAndCombat(deltaSeconds: number, now: number) {
         const mobs = this.mobService.getMobs();
+        if (this.mobsPeacefulMode) {
+            for (const mob of mobs) {
+                mob.targetPlayerId = null;
+                mob.lastAttackAt = 0;
+            }
+            return;
+        }
         for (const mob of mobs) {
             const [mapKey, mapId] = String(mob.mapId || '').split('::');
             if (!mapKey || !mapId) continue;
@@ -1727,8 +1998,9 @@ export class GameController {
             return;
         }
         if (target.dead || target.hp <= 0) return;
-        if (player.pvpMode !== 'evil') {
-            if (!silent) this.sendRaw(player.ws, { type: 'system_message', text: 'Modo Paz ativo: voce nao pode atacar jogadores.' });
+        const permission = this.getPvpAttackPermission(player, target);
+        if (!permission.ok) {
+            if (!silent) this.sendRaw(player.ws, { type: 'system_message', text: permission.reason || 'Nao pode atacar esse alvo.' });
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
             return;
@@ -1791,6 +2063,298 @@ export class GameController {
         }
     }
 
+    private getPvpAttackPermission(player: PlayerRuntime, target: PlayerRuntime): { ok: boolean; reason?: string } {
+        if (this.arePlayersInSameParty(player, target)) {
+            return { ok: false, reason: 'Voce nao pode atacar membros do seu grupo.' };
+        }
+        const mode = player.pvpMode === 'evil' ? 'evil' : player.pvpMode === 'group' ? 'group' : 'peace';
+        const targetMode = target.pvpMode === 'evil' ? 'evil' : target.pvpMode === 'group' ? 'group' : 'peace';
+        if (mode === 'peace') {
+            return { ok: false, reason: 'Modo Paz ativo: voce nao pode atacar jogadores.' };
+        }
+        if (mode === 'group') {
+            if (!player.partyId || !this.parties.has(player.partyId)) {
+                return { ok: false, reason: 'Modo Grupo exige estar em grupo.' };
+            }
+            if (targetMode !== 'group') {
+                return { ok: false, reason: 'Modo Grupo so pode atacar jogadores em modo Grupo.' };
+            }
+            return { ok: true };
+        }
+        if (mode === 'evil') {
+            if (targetMode !== 'peace' && targetMode !== 'group') {
+                return { ok: false, reason: 'Modo Mal ataca apenas alvos em Paz ou Grupo.' };
+            }
+            return { ok: true };
+        }
+        return { ok: false, reason: 'Modo PVP invalido.' };
+    }
+
+    private arePlayersInSameParty(a: PlayerRuntime, b: PlayerRuntime) {
+        if (!a.partyId || !b.partyId) return false;
+        if (a.partyId !== b.partyId) return false;
+        return this.parties.has(a.partyId);
+    }
+
+    private assignPathTo(player: PlayerRuntime, destinationX: number, destinationY: number) {
+        const projected = this.projectToWalkable(player.mapKey, destinationX, destinationY);
+        player.pathDestinationX = projected.x;
+        player.pathDestinationY = projected.y;
+        const path = this.findPathWithNearbyGoals(player.mapKey, player.x, player.y, projected.x, projected.y);
+        player.movePath = path;
+        if (path.length > 0) {
+            player.targetX = path[0].x;
+            player.targetY = path[0].y;
+            return;
+        }
+        if (!this.isPathSegmentBlocked(player.mapKey, player.x, player.y, projected.x, projected.y)) {
+            player.targetX = projected.x;
+            player.targetY = projected.y;
+            return;
+        }
+        player.targetX = player.x;
+        player.targetY = player.y;
+    }
+
+    private findPathWithNearbyGoals(mapKey: string, fromX: number, fromY: number, toX: number, toY: number) {
+        const direct = this.findPath(mapKey, fromX, fromY, toX, toY);
+        if (direct.length > 0) return direct;
+
+        const goal = this.worldToPathCell(toX, toY);
+        let candidatesChecked = 0;
+        const maxCandidates = 220;
+        const maxRadius = 120;
+        for (let r = 1; r <= maxRadius && candidatesChecked < maxCandidates; r++) {
+            for (let dx = -r; dx <= r && candidatesChecked < maxCandidates; dx++) {
+                const checks = [
+                    { cx: goal.cx + dx, cy: goal.cy - r },
+                    { cx: goal.cx + dx, cy: goal.cy + r }
+                ];
+                for (const cell of checks) {
+                    candidatesChecked += 1;
+                    if (!this.isPathCellWalkable(mapKey, cell.cx, cell.cy)) continue;
+                    const world = this.pathCellToWorld(cell.cx, cell.cy);
+                    const candidate = this.findPath(mapKey, fromX, fromY, world.x, world.y);
+                    if (candidate.length > 0) return candidate;
+                    if (candidatesChecked >= maxCandidates) break;
+                }
+            }
+            for (let dy = -r + 1; dy <= r - 1 && candidatesChecked < maxCandidates; dy++) {
+                const checks = [
+                    { cx: goal.cx - r, cy: goal.cy + dy },
+                    { cx: goal.cx + r, cy: goal.cy + dy }
+                ];
+                for (const cell of checks) {
+                    candidatesChecked += 1;
+                    if (!this.isPathCellWalkable(mapKey, cell.cx, cell.cy)) continue;
+                    const world = this.pathCellToWorld(cell.cx, cell.cy);
+                    const candidate = this.findPath(mapKey, fromX, fromY, world.x, world.y);
+                    if (candidate.length > 0) return candidate;
+                    if (candidatesChecked >= maxCandidates) break;
+                }
+            }
+        }
+        return [];
+    }
+
+    private recalculatePathToward(player: PlayerRuntime, destinationX: number, destinationY: number, now: number) {
+        if (now < Number(player.nextPathfindAt || 0)) return;
+        player.nextPathfindAt = now + PATH_RECALC_MS;
+        this.assignPathTo(player, destinationX, destinationY);
+    }
+
+    private worldToPathCell(x: number, y: number) {
+        const maxCellX = Math.floor(WORLD.width / PATHFIND_CELL_SIZE);
+        const maxCellY = Math.floor(WORLD.height / PATHFIND_CELL_SIZE);
+        return {
+            cx: clamp(Math.floor(clamp(x, 0, WORLD.width) / PATHFIND_CELL_SIZE), 0, maxCellX),
+            cy: clamp(Math.floor(clamp(y, 0, WORLD.height) / PATHFIND_CELL_SIZE), 0, maxCellY)
+        };
+    }
+
+    private pathCellToWorld(cx: number, cy: number) {
+        return {
+            x: clamp(cx * PATHFIND_CELL_SIZE + PATHFIND_CELL_SIZE / 2, 0, WORLD.width),
+            y: clamp(cy * PATHFIND_CELL_SIZE + PATHFIND_CELL_SIZE / 2, 0, WORLD.height)
+        };
+    }
+
+    private isPathCellWalkable(mapKey: string, cx: number, cy: number) {
+        const maxCellX = Math.floor(WORLD.width / PATHFIND_CELL_SIZE);
+        const maxCellY = Math.floor(WORLD.height / PATHFIND_CELL_SIZE);
+        if (cx < 0 || cy < 0 || cx > maxCellX || cy > maxCellY) return false;
+        const world = this.pathCellToWorld(cx, cy);
+        const offset = Math.max(2, PATH_PLAN_RADIUS * 0.55);
+        const probes = [
+            { x: world.x, y: world.y },
+            { x: world.x + offset, y: world.y },
+            { x: world.x - offset, y: world.y },
+            { x: world.x, y: world.y + offset },
+            { x: world.x, y: world.y - offset },
+            { x: world.x + offset, y: world.y + offset },
+            { x: world.x - offset, y: world.y + offset },
+            { x: world.x + offset, y: world.y - offset },
+            { x: world.x - offset, y: world.y - offset }
+        ];
+        for (const probe of probes) {
+            if (this.isPathBlockedAt(mapKey, probe.x, probe.y, PATH_PLAN_RADIUS)) return false;
+        }
+        return true;
+    }
+
+    private findPath(mapKey: string, fromX: number, fromY: number, toX: number, toY: number) {
+        const startRaw = this.worldToPathCell(fromX, fromY);
+        const goalRaw = this.worldToPathCell(toX, toY);
+        const start = this.findNearestWalkableCell(mapKey, startRaw.cx, startRaw.cy, 20) || startRaw;
+        const goal = this.findNearestWalkableCell(mapKey, goalRaw.cx, goalRaw.cy, 72) || goalRaw;
+        const sameCell = start.cx === goal.cx && start.cy === goal.cy;
+        if (sameCell) return [{ x: clamp(toX, 0, WORLD.width), y: clamp(toY, 0, WORLD.height) }];
+
+        const startKey = `${start.cx},${start.cy}`;
+        const goalKey = `${goal.cx},${goal.cy}`;
+        const open = new Set<string>([startKey]);
+        const closed = new Set<string>();
+        const g = new Map<string, number>([[startKey, 0]]);
+        const f = new Map<string, number>();
+        const cameFrom = new Map<string, string>();
+        f.set(startKey, this.pathHeuristic(start.cx, start.cy, goal.cx, goal.cy));
+
+        const dirs = [
+            { x: 1, y: 0, c: 1 },
+            { x: -1, y: 0, c: 1 },
+            { x: 0, y: 1, c: 1 },
+            { x: 0, y: -1, c: 1 },
+            { x: 1, y: 1, c: 1.4142 },
+            { x: 1, y: -1, c: 1.4142 },
+            { x: -1, y: 1, c: 1.4142 },
+            { x: -1, y: -1, c: 1.4142 }
+        ];
+
+        let iter = 0;
+        while (open.size > 0 && iter < PATHFIND_MAX_ITERS) {
+            iter += 1;
+            let current = '';
+            let bestF = Number.POSITIVE_INFINITY;
+            for (const node of open) {
+                const score = Number(f.get(node) ?? Number.POSITIVE_INFINITY);
+                if (score < bestF) {
+                    bestF = score;
+                    current = node;
+                }
+            }
+            if (!current) break;
+            if (current === goalKey) {
+                return this.rebuildPath(cameFrom, current, toX, toY);
+            }
+            open.delete(current);
+            closed.add(current);
+            const [cxRaw, cyRaw] = current.split(',');
+            const cx = Number(cxRaw);
+            const cy = Number(cyRaw);
+            for (const dir of dirs) {
+                const nx = cx + dir.x;
+                const ny = cy + dir.y;
+                const nkey = `${nx},${ny}`;
+                if (closed.has(nkey)) continue;
+                if (!this.isPathCellWalkable(mapKey, nx, ny)) continue;
+                if (dir.x !== 0 && dir.y !== 0) {
+                    if (!this.isPathCellWalkable(mapKey, cx + dir.x, cy) || !this.isPathCellWalkable(mapKey, cx, cy + dir.y)) {
+                        continue;
+                    }
+                }
+                const tentative = Number(g.get(current) ?? Number.POSITIVE_INFINITY) + dir.c;
+                if (!open.has(nkey)) open.add(nkey);
+                else if (tentative >= Number(g.get(nkey) ?? Number.POSITIVE_INFINITY)) continue;
+                cameFrom.set(nkey, current);
+                g.set(nkey, tentative);
+                f.set(nkey, tentative + this.pathHeuristic(nx, ny, goal.cx, goal.cy));
+            }
+        }
+        return [];
+    }
+
+    private isPathBlockedAt(mapKey: string, x: number, y: number, radiusOverride?: number) {
+        const features = MAP_FEATURES_BY_KEY[mapKey] || [];
+        const px = clamp(x, 0, WORLD.width);
+        const py = clamp(y, 0, WORLD.height);
+        const radius = Number.isFinite(Number(radiusOverride)) ? Number(radiusOverride) : PATH_PROBE_RADIUS;
+        for (const feature of features) {
+            if (!feature.collision) continue;
+            if (feature.shape === 'rect') {
+                const insideX = px >= (feature.x - radius) && px <= (feature.x + feature.w + radius);
+                const insideY = py >= (feature.y - radius) && py <= (feature.y + feature.h + radius);
+                if (insideX && insideY) return true;
+                continue;
+            }
+            const dx = px - feature.x;
+            const dy = py - feature.y;
+            if (dx * dx + dy * dy <= (feature.r + radius) * (feature.r + radius)) return true;
+        }
+        return false;
+    }
+
+    private isPathSegmentBlocked(mapKey: string, x1: number, y1: number, x2: number, y2: number) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len <= 0.01) return false;
+        const step = Math.max(6, PATHFIND_CELL_SIZE * 0.5);
+        const steps = Math.max(1, Math.ceil(len / step));
+        for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const x = x1 + dx * t;
+            const y = y1 + dy * t;
+            if (this.isPathBlockedAt(mapKey, x, y)) return true;
+        }
+        return false;
+    }
+
+    private findNearestWalkableCell(mapKey: string, cx: number, cy: number, maxRadius: number) {
+        if (this.isPathCellWalkable(mapKey, cx, cy)) return { cx, cy };
+        for (let r = 1; r <= maxRadius; r++) {
+            for (let dx = -r; dx <= r; dx++) {
+                const top = { cx: cx + dx, cy: cy - r };
+                const bottom = { cx: cx + dx, cy: cy + r };
+                if (this.isPathCellWalkable(mapKey, top.cx, top.cy)) return top;
+                if (this.isPathCellWalkable(mapKey, bottom.cx, bottom.cy)) return bottom;
+            }
+            for (let dy = -r + 1; dy <= r - 1; dy++) {
+                const left = { cx: cx - r, cy: cy + dy };
+                const right = { cx: cx + r, cy: cy + dy };
+                if (this.isPathCellWalkable(mapKey, left.cx, left.cy)) return left;
+                if (this.isPathCellWalkable(mapKey, right.cx, right.cy)) return right;
+            }
+        }
+        return null;
+    }
+
+    private pathHeuristic(ax: number, ay: number, bx: number, by: number) {
+        const dx = Math.abs(ax - bx);
+        const dy = Math.abs(ay - by);
+        const diag = Math.min(dx, dy);
+        const straight = dx + dy - diag * 2;
+        return diag * 1.4142 + straight;
+    }
+
+    private rebuildPath(cameFrom: Map<string, string>, current: string, toX: number, toY: number) {
+        const reversed: string[] = [current];
+        while (cameFrom.has(current)) {
+            current = String(cameFrom.get(current));
+            reversed.push(current);
+        }
+        reversed.reverse();
+        const path = reversed
+            .slice(1)
+            .map((key) => {
+                const [cxRaw, cyRaw] = key.split(',');
+                const cx = Number(cxRaw);
+                const cy = Number(cyRaw);
+                return this.pathCellToWorld(cx, cy);
+            });
+        path.push({ x: clamp(toX, 0, WORLD.width), y: clamp(toY, 0, WORLD.height) });
+        return path;
+    }
+
     private processPortalCollision(player: PlayerRuntime, now: number) {
         if (now - (player.lastPortalAt || 0) < PORTAL_COOLDOWN_MS) return;
         const portals = PORTALS_BY_MAP_KEY[player.mapKey] || [];
@@ -1808,6 +2372,9 @@ export class GameController {
             player.y = projected.y;
             player.targetX = player.x;
             player.targetY = player.y;
+            player.movePath = [];
+            player.pathDestinationX = player.x;
+            player.pathDestinationY = player.y;
             player.attackTargetId = null;
             player.autoAttackActive = false;
             player.lastPortalAt = now;
@@ -1825,7 +2392,7 @@ export class GameController {
         const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         const px = clamp(x, 0, WORLD.width);
         const py = clamp(y, 0, WORLD.height);
-        const radius = Math.max(8, PLAYER_HALF_SIZE - 6);
+        const radius = Math.max(8, PLAYER_HALF_SIZE - 6) + MOVE_COLLISION_PADDING;
         for (const feature of features) {
             if (!feature.collision) continue;
             if (feature.shape === 'rect') {
@@ -1845,9 +2412,10 @@ export class GameController {
         const px = clamp(x, 0, WORLD.width);
         const py = clamp(y, 0, WORLD.height);
         if (!this.isBlockedAt(mapKey, px, py)) return { x: px, y: py };
-        for (let radius = 20; radius <= 280; radius += 20) {
-            for (let i = 0; i < 24; i++) {
-                const angle = (Math.PI * 2 * i) / 24;
+        const maxRadius = Math.max(WORLD.width, WORLD.height);
+        for (let radius = 16; radius <= maxRadius; radius += 16) {
+            for (let i = 0; i < 64; i++) {
+                const angle = (Math.PI * 2 * i) / 64;
                 const nx = clamp(px + Math.cos(angle) * radius, 0, WORLD.width);
                 const ny = clamp(py + Math.sin(angle) * radius, 0, WORLD.height);
                 if (!this.isBlockedAt(mapKey, nx, ny)) return { x: nx, y: ny };
@@ -1880,11 +2448,25 @@ export class GameController {
         if (levelsGained > 0) this.sendStatsUpdated(player);
     }
 
-    private normalizeInventorySlots(items: any[]) {
+    private normalizeInventorySlots(items: any[], equippedWeaponId: string | null = null) {
         const out = [];
         const used = new Set();
         for (const item of items) {
             const clone = { ...item };
+            if (this.isStackableItem(clone)) {
+                const max = this.getItemMaxStack(clone);
+                const rawQty = Number(clone.quantity);
+                clone.quantity = Number.isFinite(rawQty) ? clamp(Math.floor(rawQty), 1, max) : 1;
+                clone.maxStack = max;
+                clone.stackable = true;
+            } else {
+                clone.quantity = 1;
+            }
+            if (equippedWeaponId && clone.id === equippedWeaponId) {
+                clone.slotIndex = -1;
+                out.push(clone);
+                continue;
+            }
             if (!Number.isInteger(clone.slotIndex) || clone.slotIndex < 0 || clone.slotIndex >= INVENTORY_SIZE || used.has(clone.slotIndex)) {
                 clone.slotIndex = this.firstFreeInventorySlot(out);
             }
@@ -1948,6 +2530,88 @@ export class GameController {
             mapId,
             expiresAt: Date.now() + GROUND_ITEM_TTL_MS
         });
+    }
+
+    private dropHpPotionAt(x: number, y: number, mapId: string) {
+        this.groundItems.push({
+            id: randomUUID(),
+            type: 'potion_hp',
+            name: HP_POTION_TEMPLATE.name,
+            slot: HP_POTION_TEMPLATE.slot,
+            bonuses: {},
+            quantity: 1,
+            stackable: true,
+            maxStack: 64,
+            healPercent: Number(HP_POTION_TEMPLATE.healPercent || 0.5),
+            x,
+            y,
+            mapId,
+            expiresAt: Date.now() + GROUND_ITEM_TTL_MS
+        } as any);
+    }
+
+    private isStackableItem(item: any) {
+        if (!item || typeof item !== 'object') return false;
+        if (item.stackable === true) return true;
+        return String(item.type || '') === 'potion_hp';
+    }
+
+    private getItemMaxStack(item: any) {
+        const parsed = Number(item?.maxStack);
+        if (Number.isFinite(parsed) && parsed > 1) return Math.floor(parsed);
+        return 64;
+    }
+
+    private canItemsStack(a: any, b: any) {
+        if (!this.isStackableItem(a) || !this.isStackableItem(b)) return false;
+        return String(a.type || '') === String(b.type || '')
+            && String(a.name || '') === String(b.name || '')
+            && String(a.slot || '') === String(b.slot || '');
+    }
+
+    private addItemToInventory(player: PlayerRuntime, item: any, quantity: number) {
+        let remaining = Math.max(0, Math.floor(Number(quantity || 0)));
+        if (remaining <= 0) return 0;
+
+        if (!this.isStackableItem(item)) {
+            while (remaining > 0) {
+                const freeSlot = this.firstFreeInventorySlot(player.inventory);
+                if (freeSlot === -1) break;
+                player.inventory.push({ ...item, id: randomUUID(), quantity: 1, slotIndex: freeSlot });
+                remaining -= 1;
+            }
+            return remaining;
+        }
+
+        const max = this.getItemMaxStack(item);
+        for (const existing of player.inventory) {
+            if (remaining <= 0) break;
+            if (!this.canItemsStack(existing, item)) continue;
+            const current = Math.max(1, Math.floor(Number(existing.quantity || 1)));
+            if (current >= max) continue;
+            const add = Math.min(max - current, remaining);
+            existing.quantity = current + add;
+            existing.maxStack = max;
+            existing.stackable = true;
+            remaining -= add;
+        }
+
+        while (remaining > 0) {
+            const freeSlot = this.firstFreeInventorySlot(player.inventory);
+            if (freeSlot === -1) break;
+            const add = Math.min(max, remaining);
+            player.inventory.push({
+                ...item,
+                id: randomUUID(),
+                quantity: add,
+                stackable: true,
+                maxStack: max,
+                slotIndex: freeSlot
+            });
+            remaining -= add;
+        }
+
+        return remaining;
     }
 
     private pruneExpiredGroundItems(now: number) {
@@ -2203,6 +2867,15 @@ export class GameController {
     private removePlayerFromParty(player: PlayerRuntime) {
         const party = player.partyId ? this.parties.get(player.partyId) : null;
         player.partyId = null;
+        if (player.pvpMode === 'group') {
+            player.pvpMode = 'peace';
+            this.broadcastRaw({
+                type: 'player.pvpModeUpdated',
+                playerId: player.id,
+                mode: 'peace'
+            });
+            this.persistPlayer(player);
+        }
         if (!party) {
             this.sendPartyStateToPlayer(player, null);
             return;
