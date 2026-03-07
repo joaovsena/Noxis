@@ -2,7 +2,7 @@
 set -e
 
 echo "[app] Waiting for database and syncing schema..."
-until npx prisma db push --skip-generate; do
+until npx prisma db push; do
   echo "[app] Database not ready yet. Retrying in 2s..."
   sleep 2
 done

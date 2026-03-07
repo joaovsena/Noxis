@@ -9,8 +9,9 @@
     <div id="ui-container">
         <div id="auth-screen" class="screen">
             <h1>Noxis</h1>
-            <p class="subtitle">Conta persistida no banco de dados. Classe definida apenas no registro.</p>
-            <div class="setup-box">
+            <p class="subtitle">Fluxo de entrada: login -> selecao de personagem -> mundo.</p>
+
+            <div id="screen-login-register" class="setup-box">
                 <div class="controls">
                     <div class="auth-buttons">
                         <button id="tab-login" class="active">Login</button>
@@ -30,30 +31,61 @@
                         <input type="text" id="register-username" maxlength="16" placeholder="usuario">
                         <label>Senha</label>
                         <input type="password" id="register-password" maxlength="32" placeholder="senha">
-                        <label>Nick</label>
-                        <input type="text" id="register-nick" maxlength="12" placeholder="nick">
-                        <label>Classe</label>
-                        <select id="register-class">
-                            <option value="knight">Cavaleiro (azul)</option>
-                            <option value="archer">Arqueiro (laranja)</option>
-                            <option value="druid">Druida (verde)</option>
-                            <option value="assassin">Assassino (preto)</option>
-                        </select>
                         <button id="btn-register">Criar conta</button>
                     </div>
-
-                    <p id="auth-status"></p>
                 </div>
                 <div id="preview-box">
-                    <div id="class-preview" class="class-avatar preview-avatar class-knight">S</div>
+                    <div id="class-preview" class="class-avatar preview-avatar class-knight">N</div>
                     <div class="preview-help">
-                        Arqueiro: dano fisico de alcance.
-                        Druida: dano magico de alcance.
-                        Assassino: rapido no ataque/movimento.
-                        Pressione C no jogo para ver atributos.
+                        Registre sua conta e faca login.
+                        A classe do personagem sera escolhida na tela de criacao.
                     </div>
                 </div>
             </div>
+
+            <div id="screen-character-select" class="setup-box hidden">
+                <div class="controls">
+                    <label>Selecione seu personagem</label>
+                    <div id="character-slot-grid" class="character-slot-grid">
+                        <button id="character-slot-0" class="character-slot" type="button"></button>
+                        <button id="character-slot-1" class="character-slot" type="button"></button>
+                        <button id="character-slot-2" class="character-slot" type="button"></button>
+                    </div>
+                    <div class="character-actions">
+                        <button id="btn-character-enter" type="button" disabled>Jogar</button>
+                        <button id="btn-character-create-from-select" type="button">Criar personagem</button>
+                    </div>
+                </div>
+                <div id="character-summary" class="preview-help">Nenhum slot selecionado.</div>
+            </div>
+
+            <div id="screen-character-create" class="setup-box hidden">
+                <div class="controls">
+                    <label>Nome do personagem</label>
+                    <input type="text" id="create-char-name" maxlength="12" placeholder="3 a 12 caracteres">
+                    <label>Classe</label>
+                    <select id="create-char-class">
+                        <option value="knight">Cavaleiro</option>
+                        <option value="archer">Arqueiro</option>
+                        <option value="druid">Druida</option>
+                        <option value="assassin">Assassino</option>
+                    </select>
+                    <label>Sexo</label>
+                    <select id="create-char-gender">
+                        <option value="male">Masculino</option>
+                        <option value="female">Feminino</option>
+                    </select>
+                    <div class="character-actions">
+                        <button id="btn-character-create" type="button">Criar</button>
+                        <button id="btn-character-create-back" type="button">Voltar</button>
+                    </div>
+                </div>
+                <div id="create-char-preview" class="preview-help">
+                    Escolha classe e sexo para criar seu personagem.
+                </div>
+            </div>
+
+            <p id="auth-status"></p>
         </div>
     </div>
 
@@ -136,6 +168,23 @@
                 <input id="path-debug-toggle" type="checkbox">
                 <span>Debug Path</span>
             </label>
+            <label id="hud-debug-setting" class="map-settings-line hidden">
+                <input id="hud-debug-toggle" type="checkbox">
+                <span>Debug HUD</span>
+            </label>
+            <div id="hud-debug-panel" class="hud-debug-panel hidden">
+                <div class="hud-debug-row">
+                    <span>Escala Min</span>
+                    <input id="hud-scale-min" type="range" min="70" max="110" step="1" value="84">
+                    <span id="hud-scale-min-value">84%</span>
+                </div>
+                <div class="hud-debug-row">
+                    <span>Escala Max</span>
+                    <input id="hud-scale-max" type="range" min="90" max="140" step="1" value="106">
+                    <span id="hud-scale-max-value">106%</span>
+                </div>
+                <button id="hud-debug-reset" type="button">Reset HUD</button>
+            </div>
             <label id="mob-peaceful-setting" class="map-settings-line hidden">
                 <input id="mob-peaceful-toggle" type="checkbox">
                 <span>Mobs pacificos</span>
@@ -156,7 +205,12 @@
             <button class="chat-scope active" data-scope="local">Local</button>
             <button class="chat-scope" data-scope="map">Mapa</button>
             <button class="chat-scope" data-scope="global">Global</button>
-            <button id="chat-toggle">Ocultar</button>
+            <button id="chat-toggle">Chat</button>
+        </div>
+        <div id="chat-mode-menu" class="chat-mode-menu hidden">
+            <button class="chat-mode-option" data-mode="expanded">Completo</button>
+            <button class="chat-mode-option" data-mode="compact">Compacto</button>
+            <button class="chat-mode-option" data-mode="mini">Mini</button>
         </div>
         <div id="chat-log"></div>
         <input id="chat-input" maxlength="180" placeholder="Digite e pressione Enter">

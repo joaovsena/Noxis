@@ -1,6 +1,10 @@
 import { WebSocket } from 'ws';
 interface ExtendedWebSocket extends WebSocket {
     playerId?: number;
+    authUserId?: string;
+    authUsername?: string;
+    authRole?: string;
+    pendingPlayerProfiles?: any[];
 }
 import { GameController } from './GameController';
 export declare class WSHandler {

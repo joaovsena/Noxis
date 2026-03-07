@@ -65,6 +65,16 @@ export class Network {
             return;
         }
 
+        if (message.type === 'auth_character_required') {
+            this.game.onCharacterRequired(message);
+            return;
+        }
+
+        if (message.type === 'auth_character_select') {
+            this.game.onCharacterSelect(message);
+            return;
+        }
+
         if (message.type === 'world_state') {
             this.game.updateWorld(message);
             return;
@@ -177,6 +187,16 @@ export class Network {
 
         if (message.type === 'admin.mobPeacefulState') {
             this.game.onAdminMobPeacefulState(message);
+            return;
+        }
+
+        if (message.type === 'skill.effect') {
+            this.game.onSkillEffect(message);
+            return;
+        }
+
+        if (message.type === 'hotbar.state') {
+            this.game.onHotbarState(message);
             return;
         }
     }

@@ -4,26 +4,49 @@ import { hashPassword, generateSalt } from '../utils/hash';
 
 export class PersistenceService {
     async getUser(username: string) {
-        return await prisma.user.findUnique({ where: { username }, include: { player: true } });
+        return await prisma.user.findUnique({
+            where: { username },
+            include: { players: { orderBy: { slot: 'asc' } } }
+        });
+    }
+
+    async getUserById(userId: string) {
+        return await prisma.user.findUnique({
+            where: { id: userId },
+            include: { players: { orderBy: { slot: 'asc' } } }
+        });
     }
 
     async getPlayerByName(name: string) {
         return await prisma.player.findFirst({ where: { name } });
     }
 
-    async createUser(username: string, password: string, profile: any) {
+    async createUser(username: string, password: string, profile?: any) {
         const salt = generateSalt();
         const passwordHash = hashPassword(password, salt);
+        const data: any = {
+            username,
+            passwordHash,
+            salt
+        };
+        if (profile) {
+            data.players = {
+                create: profile
+            };
+        }
         return await prisma.user.create({
+            data,
+            include: { players: { orderBy: { slot: 'asc' } } }
+        });
+    }
+
+    async createPlayerForUser(userId: string, slot: number, profile: any) {
+        return await prisma.player.create({
             data: {
-                username,
-                passwordHash,
-                salt,
-                player: {
-                    create: profile
-                }
-            },
-            include: { player: true }
+                ...profile,
+                userId,
+                slot
+            }
         });
     }
 

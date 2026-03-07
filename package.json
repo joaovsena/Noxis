@@ -7,6 +7,14 @@
     "build": "tsc",
     "start": "node dist/server/index.js",
     "dev": "ts-node server/index.ts",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down",
+    "docker:reset": "docker compose down -v --remove-orphans",
+    "docker:logs": "docker compose logs -f app db",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:reset": "prisma db push --force-reset",
+    "dev:setup": "npm run db:reset && npm run db:generate",
     "test": "jest"
   },
   "keywords": [],
@@ -14,17 +22,20 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@prisma/client": "^5.0.0",
+    "@prisma/adapter-pg": "^7.4.2",
+    "@prisma/client": "^7.4.2",
     "express": "^5.2.1",
+    "pg": "^8.20.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.0",
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.18.0",
     "@types/ws": "^8.0.0",
     "jest": "^29.0.0",
     "nodemon": "^3.1.14",
-    "prisma": "^5.0.0",
+    "prisma": "^7.4.2",
     "ts-node": "^10.0.0",
     "typescript": "^5.0.0"
   }

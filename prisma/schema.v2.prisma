@@ -1,0 +1,690 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  player
+  gm
+  adm
+}
+
+enum CharacterStatus {
+  active
+  banned
+  deleted
+}
+
+enum Gender {
+  male
+  female
+  other
+}
+
+enum CharacterClass {
+  knight
+  archer
+  druid
+  assassin
+}
+
+enum PvPMode {
+  peace
+  group
+  evil
+}
+
+enum ItemCategory {
+  equipment
+  consumable
+  material
+  quest
+  currency
+  misc
+}
+
+enum EquipmentSlotType {
+  weapon
+  helmet
+  chest
+  gloves
+  pants
+  boots
+  ring
+  necklace
+  accessory
+}
+
+enum ItemRarity {
+  common
+  uncommon
+  rare
+  epic
+  legendary
+  mythic
+}
+
+enum BindingType {
+  unbound
+  bind_on_pickup
+  bind_on_equip
+}
+
+enum StatType {
+  str
+  int
+  dex
+  vit
+  physicalAttack
+  magicAttack
+  physicalDefense
+  magicDefense
+  maxHp
+  maxMp
+  accuracy
+  evasion
+  critChance
+  critDamage
+  moveSpeed
+  attackSpeed
+  luck
+}
+
+enum SkillTargetType {
+  self
+  ally
+  enemy
+  area
+}
+
+enum EffectKind {
+  buff
+  debuff
+  dot
+  hot
+  shield
+  transform
+}
+
+enum EffectStackingRule {
+  refresh
+  add_stack
+  replace_if_stronger
+  no_stack
+}
+
+enum MatchType {
+  duel
+  arena
+  battleground
+  open_world
+}
+
+enum MatchResult {
+  win
+  loss
+  draw
+}
+
+enum TransactionType {
+  loot
+  npc_buy
+  npc_sell
+  trade
+  craft
+  repair
+  mail
+  admin
+}
+
+enum FriendshipStatus {
+  pending
+  accepted
+  declined
+  blocked
+}
+
+model User {
+  id             String          @id @default(cuid())
+  username       String          @unique
+  email          String?         @unique
+  passwordHash   String
+  passwordSalt   String
+  role           UserRole        @default(player)
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  lastLoginAt    DateTime?
+
+  sessions       UserSession[]
+  characters     Character[]
+  auditLogs      UserAuditLog[]
+}
+
+model UserSession {
+  id             String          @id @default(cuid())
+  userId         String
+  refreshToken   String          @unique
+  ipAddress      String?
+  userAgent      String?
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime        @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model UserAuditLog {
+  id             String          @id @default(cuid())
+  userId         String
+  event          String
+  payload        Json?
+  createdAt      DateTime        @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Character {
+  id                      String                 @id @default(cuid())
+  userId                  String
+  slot                    Int
+  name                    String                 @unique
+  class                   CharacterClass
+  gender                  Gender                 @default(male)
+  status                  CharacterStatus        @default(active)
+  level                   Int                    @default(1)
+  xp                      Int                    @default(0)
+  pvpMode                 PvPMode                @default(peace)
+  mapKey                  String                 @default("forest")
+  mapId                   String                 @default("Z1")
+  posX                    Float                  @default(500)
+  posY                    Float                  @default(500)
+  hp                      Int                    @default(100)
+  mp                      Int                    @default(50)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+  lastSeenAt              DateTime?
+
+  user                    User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  progression             CharacterProgression?
+  skillBook               CharacterSkill[]
+  activeEffects           CharacterActiveEffect[]
+  inventorySlots          CharacterInventorySlot[]
+  equippedSlots           CharacterEquipmentSlot[]
+  itemInstances           ItemInstance[]
+  currencies              CharacterCurrency[]
+  petOwnerships           PetOwnership[]
+  mountOwnerships         MountOwnership[]
+  activePet               CharacterActivePet?
+  activeMount             CharacterActiveMount?
+  economyEntries          EconomyLedgerEntry[]
+  pvpParticipants         PvPMatchParticipant[]
+  pveRuns                 CharacterPvERun[]
+  friendshipsA            Friendship[]           @relation("FriendA")
+  friendshipsB            Friendship[]           @relation("FriendB")
+  partyMembers            PartyMember[]
+
+  @@unique([userId, slot])
+  @@index([class, level])
+  @@index([mapKey, mapId])
+}
+
+model CharacterProgression {
+  characterId             String                 @id
+  unspentStatPoints       Int                    @default(0)
+  unspentSkillPoints      Int                    @default(0)
+  baseStats               Json
+  allocatedStats          Json
+  derivedStats            Json
+  pveRating               Int                    @default(1000)
+  pvpRating               Int                    @default(1000)
+  title                   String?
+  achievementPoints       Int                    @default(0)
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+}
+
+model SkillDefinition {
+  id                      String                 @id
+  class                   CharacterClass
+  name                    String
+  description             String
+  targetType              SkillTargetType
+  maxLevel                Int                    @default(5)
+  cooldownMs              Int
+  manaCostBase            Int                    @default(0)
+  range                   Int?
+  iconKey                 String?
+  metadata                Json?
+  isActive                Boolean                @default(true)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  levels                  SkillLevelData[]
+  learnedBy               CharacterSkill[]
+  appliesEffects          SkillEffectLink[]
+}
+
+model SkillLevelData {
+  id                      String                 @id @default(cuid())
+  skillId                 String
+  level                   Int
+  powerScalar             Float                  @default(1)
+  manaCost                Int?
+  cooldownMs              Int?
+  extraData               Json?
+
+  skill                   SkillDefinition        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([skillId, level])
+}
+
+model CharacterSkill {
+  characterId             String
+  skillId                 String
+  level                   Int                    @default(0)
+  isOnHotbar              Boolean                @default(false)
+  hotbarKey               String?
+  updatedAt               DateTime               @updatedAt
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  skill                   SkillDefinition        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([characterId, skillId])
+  @@index([skillId, level])
+}
+
+model EffectDefinition {
+  id                      String                 @id
+  name                    String
+  kind                    EffectKind
+  stackingRule            EffectStackingRule     @default(refresh)
+  maxStacks               Int                    @default(1)
+  durationMs              Int
+  tickMs                  Int?
+  statModifiers           Json?
+  metadata                Json?
+}
+
+model SkillEffectLink {
+  id                      String                 @id @default(cuid())
+  skillId                 String
+  effectId                String
+  chance                  Float                  @default(1)
+  scaleWithSkillLevel     Boolean                @default(true)
+
+  skill                   SkillDefinition        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  effect                  EffectDefinition       @relation(fields: [effectId], references: [id], onDelete: Cascade)
+
+  @@unique([skillId, effectId])
+}
+
+model CharacterActiveEffect {
+  id                      String                 @id @default(cuid())
+  characterId             String
+  effectId                String
+  sourceSkillId           String?
+  stacks                  Int                    @default(1)
+  startedAt               DateTime               @default(now())
+  expiresAt               DateTime
+  nextTickAt              DateTime?
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  effect                  EffectDefinition       @relation(fields: [effectId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, expiresAt])
+}
+
+model ItemTemplate {
+  id                      String                 @id
+  name                    String
+  category                ItemCategory
+  rarity                  ItemRarity             @default(common)
+  equipmentSlot           EquipmentSlotType?
+  stackable               Boolean                @default(false)
+  maxStack                Int                    @default(1)
+  bindingType             BindingType            @default(unbound)
+  sellPrice               Int                    @default(0)
+  buyPrice                Int                    @default(0)
+  requiredLevel           Int                    @default(1)
+  requiredClass           CharacterClass?
+  statBonuses             Json?
+  useEffect               Json?
+  metadata                Json?
+  isTradable              Boolean                @default(true)
+  isDroppable             Boolean                @default(true)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  instances               ItemInstance[]
+  dropTables              DropTableEntry[]
+}
+
+model ItemInstance {
+  id                      String                 @id @default(cuid())
+  templateId              String
+  ownerCharacterId        String?
+  quantity                Int                    @default(1)
+  durability              Int?
+  enhancementLevel        Int                    @default(0)
+  isBound                 Boolean                @default(false)
+  customName              String?
+  rolledStats             Json?
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  template                ItemTemplate           @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  ownerCharacter          Character?             @relation(fields: [ownerCharacterId], references: [id], onDelete: SetNull)
+  inventorySlots          CharacterInventorySlot[]
+  equipmentSlots          CharacterEquipmentSlot[]
+  groundDrop              GroundDrop?
+}
+
+model CharacterInventorySlot {
+  characterId             String
+  slotIndex               Int
+  itemInstanceId          String?
+  updatedAt               DateTime               @updatedAt
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  itemInstance            ItemInstance?          @relation(fields: [itemInstanceId], references: [id], onDelete: SetNull)
+
+  @@id([characterId, slotIndex])
+  @@unique([itemInstanceId])
+}
+
+model CharacterEquipmentSlot {
+  characterId             String
+  slotType                EquipmentSlotType
+  itemInstanceId          String?
+  updatedAt               DateTime               @updatedAt
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  itemInstance            ItemInstance?          @relation(fields: [itemInstanceId], references: [id], onDelete: SetNull)
+
+  @@id([characterId, slotType])
+  @@unique([itemInstanceId])
+}
+
+model PetTemplate {
+  id                      String                 @id
+  name                    String
+  rarity                  ItemRarity             @default(common)
+  baseStats               Json
+  growthCurve             Json
+  skillPool               Json?
+  metadata                Json?
+
+  ownerships              PetOwnership[]
+}
+
+model PetOwnership {
+  id                      String                 @id @default(cuid())
+  characterId             String
+  petTemplateId           String
+  name                    String?
+  level                   Int                    @default(1)
+  xp                      Int                    @default(0)
+  loyalty                 Int                    @default(0)
+  hunger                  Int                    @default(100)
+  isLocked                Boolean                @default(false)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  petTemplate             PetTemplate            @relation(fields: [petTemplateId], references: [id], onDelete: Restrict)
+  activeFor               CharacterActivePet?
+
+  @@index([characterId, level])
+}
+
+model CharacterActivePet {
+  characterId             String                 @id
+  petOwnershipId          String                 @unique
+  summonedAt              DateTime               @default(now())
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  petOwnership            PetOwnership           @relation(fields: [petOwnershipId], references: [id], onDelete: Cascade)
+}
+
+model MountTemplate {
+  id                      String                 @id
+  name                    String
+  rarity                  ItemRarity             @default(common)
+  moveSpeedBonus          Float                  @default(0)
+  staminaBase             Int                    @default(100)
+  metadata                Json?
+
+  ownerships              MountOwnership[]
+}
+
+model MountOwnership {
+  id                      String                 @id @default(cuid())
+  characterId             String
+  mountTemplateId         String
+  level                   Int                    @default(1)
+  xp                      Int                    @default(0)
+  stamina                 Int                    @default(100)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  mountTemplate           MountTemplate          @relation(fields: [mountTemplateId], references: [id], onDelete: Restrict)
+  activeFor               CharacterActiveMount?
+}
+
+model CharacterActiveMount {
+  characterId             String                 @id
+  mountOwnershipId        String                 @unique
+  mountedAt               DateTime               @default(now())
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  mountOwnership          MountOwnership         @relation(fields: [mountOwnershipId], references: [id], onDelete: Cascade)
+}
+
+model CurrencyDefinition {
+  id                      String                 @id
+  name                    String                 @unique
+  isPremium               Boolean                @default(false)
+}
+
+model CharacterCurrency {
+  characterId             String
+  currencyId              String
+  balance                 BigInt                 @default(0)
+  updatedAt               DateTime               @updatedAt
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  currency                CurrencyDefinition     @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+
+  @@id([characterId, currencyId])
+}
+
+model EconomyLedgerEntry {
+  id                      String                 @id @default(cuid())
+  characterId             String
+  txType                  TransactionType
+  currencyId              String?
+  amount                  BigInt?
+  referenceType           String?
+  referenceId             String?
+  details                 Json?
+  createdAt               DateTime               @default(now())
+
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId, createdAt])
+  @@index([txType, createdAt])
+}
+
+model MapDefinition {
+  key                     String                 @id
+  code                    String                 @unique
+  name                    String
+  widthPx                 Int
+  heightPx                Int
+  tileSize                Int                    @default(32)
+  metadata                Json?
+
+  instances               MapInstance[]
+  dropTables              DropTable[]
+}
+
+model MapInstance {
+  id                      String                 @id @default(cuid())
+  mapKey                  String
+  shardId                 String
+  maxPlayers              Int                    @default(200)
+  createdAt               DateTime               @default(now())
+
+  map                     MapDefinition          @relation(fields: [mapKey], references: [key], onDelete: Restrict)
+  groundDrops             GroundDrop[]
+
+  @@unique([mapKey, shardId])
+}
+
+model GroundDrop {
+  id                      String                 @id @default(cuid())
+  mapInstanceId           String
+  itemInstanceId          String                 @unique
+  ownerCharacterId        String?
+  x                       Float
+  y                       Float
+  expiresAt               DateTime
+  createdAt               DateTime               @default(now())
+
+  mapInstance             MapInstance            @relation(fields: [mapInstanceId], references: [id], onDelete: Cascade)
+  itemInstance            ItemInstance           @relation(fields: [itemInstanceId], references: [id], onDelete: Cascade)
+
+  @@index([mapInstanceId, expiresAt])
+}
+
+model DropTable {
+  id                      String                 @id @default(cuid())
+  mapKey                  String?
+  mobTemplateId           String?
+  name                    String
+  metadata                Json?
+
+  map                     MapDefinition?         @relation(fields: [mapKey], references: [key], onDelete: SetNull)
+  entries                 DropTableEntry[]
+}
+
+model DropTableEntry {
+  id                      String                 @id @default(cuid())
+  dropTableId             String
+  itemTemplateId          String
+  chance                  Float
+  minQty                  Int                    @default(1)
+  maxQty                  Int                    @default(1)
+  weight                  Int                    @default(1)
+
+  dropTable               DropTable              @relation(fields: [dropTableId], references: [id], onDelete: Cascade)
+  itemTemplate            ItemTemplate           @relation(fields: [itemTemplateId], references: [id], onDelete: Restrict)
+
+  @@index([dropTableId, chance])
+}
+
+model PvPMatch {
+  id                      String                 @id @default(cuid())
+  type                    MatchType
+  mapKey                  String?
+  startedAt               DateTime               @default(now())
+  endedAt                 DateTime?
+  metadata                Json?
+
+  participants            PvPMatchParticipant[]
+
+  @@index([type, startedAt])
+}
+
+model PvPMatchParticipant {
+  matchId                 String
+  characterId             String
+  team                    Int?
+  kills                   Int                    @default(0)
+  deaths                  Int                    @default(0)
+  assists                 Int                    @default(0)
+  damageDone              BigInt                 @default(0)
+  damageTaken             BigInt                 @default(0)
+  healingDone             BigInt                 @default(0)
+  result                  MatchResult?
+  ratingDelta             Int                    @default(0)
+
+  match                   PvPMatch               @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([matchId, characterId])
+  @@index([characterId, result])
+}
+
+model PvERun {
+  id                      String                 @id @default(cuid())
+  mode                    String
+  mapKey                  String?
+  difficulty              String?
+  startedAt               DateTime               @default(now())
+  endedAt                 DateTime?
+  completed               Boolean                @default(false)
+  metadata                Json?
+
+  participants            CharacterPvERun[]
+}
+
+model CharacterPvERun {
+  runId                   String
+  characterId             String
+  score                   Int                    @default(0)
+  rewardClaimed           Boolean                @default(false)
+
+  run                     PvERun                 @relation(fields: [runId], references: [id], onDelete: Cascade)
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([runId, characterId])
+}
+
+model Friendship {
+  id                      String                 @id @default(cuid())
+  userAId                 String
+  userBId                 String
+  status                  FriendshipStatus       @default(pending)
+  requestedByUserId       String
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  userA                   Character              @relation("FriendA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB                   Character              @relation("FriendB", fields: [userBId], references: [id], onDelete: Cascade)
+
+  @@unique([userAId, userBId])
+  @@index([status, updatedAt])
+}
+
+model Party {
+  id                      String                 @id @default(cuid())
+  leaderCharacterId       String
+  createdAt               DateTime               @default(now())
+  disbandedAt             DateTime?
+  metadata                Json?
+
+  members                 PartyMember[]
+}
+
+model PartyMember {
+  partyId                 String
+  characterId             String
+  joinedAt                DateTime               @default(now())
+  role                    String                 @default("member")
+
+  party                   Party                  @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  character               Character              @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([partyId, characterId])
+  @@index([characterId])
+}

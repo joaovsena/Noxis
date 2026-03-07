@@ -2,6 +2,10 @@ import { WebSocket } from 'ws';
 
 interface ExtendedWebSocket extends WebSocket {
     playerId?: number;
+    authUserId?: string;
+    authUsername?: string;
+    authRole?: string;
+    pendingPlayerProfiles?: any[];
 }
 import { GameController } from './GameController';
 import { WSMessage } from '../models/types';
@@ -24,6 +28,14 @@ export class WSHandler {
         if (!ws.playerId || !this.controller.players.has(ws.playerId)) {
             if (msg.type.startsWith('auth_')) {
                 this.controller.handleAuth(ws, msg as any);
+                return;
+            }
+            if (msg.type === 'character_create') {
+                void this.controller.handleCharacterCreate(ws, msg as any);
+                return;
+            }
+            if (msg.type === 'character_enter') {
+                void this.controller.handleCharacterEnter(ws, msg as any);
             }
             return;
         }
@@ -141,6 +153,12 @@ export class WSHandler {
                 break;
             case 'skill.cast':
                 this.controller.handleSkillCast(player, msg as any);
+                break;
+            case 'skill.learn':
+                this.controller.handleSkillLearn(player, msg as any);
+                break;
+            case 'hotbar.set':
+                this.controller.handleHotbarSet(player, msg as any);
                 break;
             // Adicionar outros cases...
         }

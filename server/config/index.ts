@@ -176,6 +176,14 @@ export const HP_POTION_TEMPLATE = {
     slot: 'consumable',
     healPercent: 0.5
 };
+export const SKILL_RESET_HOURGLASS_TEMPLATE = {
+    type: 'skill_reset_hourglass',
+    name: 'Ampulheta de Habilidades',
+    slot: 'consumable',
+    stackable: true,
+    maxStack: 64
+};
+export const SKILL_RESET_HOURGLASS_DROP_CHANCE = 0.5;
 export const STATUS_IDS = {
     physicalAttack: 1,
     magicAttack: 2,

@@ -36,7 +36,9 @@ import {
     MOB_LEASH_RANGE,
     MOB_ATTACK_RANGE,
     MOB_ATTACK_INTERVAL_MS,
-    HP_POTION_TEMPLATE
+    HP_POTION_TEMPLATE,
+    SKILL_RESET_HOURGLASS_TEMPLATE,
+    SKILL_RESET_HOURGLASS_DROP_CHANCE
 } from '../config';
 import { logEvent } from '../utils/logger';
 
@@ -71,6 +73,15 @@ interface FriendRequestItem {
     toPlayerId: number;
     createdAt: number;
     expiresAt: number;
+}
+
+interface AuthSocket {
+    send: (payload: string) => void;
+    playerId?: number;
+    authUserId?: string;
+    authUsername?: string;
+    authRole?: string;
+    pendingPlayerProfiles?: any[];
 }
 
 const PRIMARY_STATS = ['str', 'int', 'dex', 'vit'] as const;
@@ -108,6 +119,101 @@ const ATTRIBUTE_DRIVEN_OVERRIDE_KEYS = [
 const PATH_PLAN_RADIUS = PATH_PROBE_RADIUS + 1;
 const MOVE_COLLISION_PADDING = 4;
 
+type SkillDef = {
+    id: string;
+    classId: 'knight' | 'archer' | 'druid' | 'assassin';
+    name: string;
+    cooldownMs: number;
+    target: 'mob' | 'self';
+    range?: number;
+    power?: number;
+    magic?: boolean;
+    aoeRadius?: number;
+    hpCostPct?: number;
+    lostHpScale?: number;
+    healVitScale?: number;
+    buff?: {
+        id: string;
+        durationMs: number;
+        attackMul?: number;
+        defenseMul?: number;
+        magicDefenseMul?: number;
+        moveMul?: number;
+        attackSpeedMul?: number;
+        critAdd?: number;
+        evasionAdd?: number;
+        damageReduction?: number;
+        lifesteal?: number;
+        reflect?: number;
+        stealth?: boolean;
+    };
+    effectKey?: string;
+};
+
+const SKILL_DEFS: Record<string, SkillDef> = {
+    war_bastion_escudo_fe: { id: 'war_bastion_escudo_fe', classId: 'knight', name: 'Escudo da Fe', cooldownMs: 12000, target: 'self', buff: { id: 'escudo_fe', durationMs: 12000, defenseMul: 1.35, magicDefenseMul: 1.35 }, effectKey: 'war_shield' },
+    war_bastion_muralha: { id: 'war_bastion_muralha', classId: 'knight', name: 'Muralha', cooldownMs: 14000, target: 'self', buff: { id: 'muralha', durationMs: 8000, reflect: 0.18, damageReduction: 0.15 }, effectKey: 'war_wall' },
+    war_bastion_renovacao: { id: 'war_bastion_renovacao', classId: 'knight', name: 'Renovacao', cooldownMs: 10000, target: 'self', healVitScale: 1.6, effectKey: 'war_heal' },
+    war_bastion_inabalavel: { id: 'war_bastion_inabalavel', classId: 'knight', name: 'Inabalavel', cooldownMs: 26000, target: 'self', buff: { id: 'inabalavel', durationMs: 10000, damageReduction: 0.9 }, effectKey: 'war_steel' },
+    war_bastion_impacto_sismico: { id: 'war_bastion_impacto_sismico', classId: 'knight', name: 'Impacto Sismico', cooldownMs: 9000, target: 'mob', range: 105, power: 1.55, aoeRadius: 150, effectKey: 'war_quake' },
+
+    war_carrasco_frenesi: { id: 'war_carrasco_frenesi', classId: 'knight', name: 'Frenesi', cooldownMs: 14000, target: 'self', buff: { id: 'frenesi', durationMs: 12000, lifesteal: 0.2 }, effectKey: 'war_frenzy' },
+    war_carrasco_lacerar: { id: 'war_carrasco_lacerar', classId: 'knight', name: 'Lacerar', cooldownMs: 6500, target: 'mob', range: 95, power: 1.35, effectKey: 'war_bleed' },
+    war_carrasco_ira: { id: 'war_carrasco_ira', classId: 'knight', name: 'Ira', cooldownMs: 12000, target: 'self', buff: { id: 'ira', durationMs: 10000, attackMul: 1.35, attackSpeedMul: 1.25, defenseMul: 0.75, magicDefenseMul: 0.75 }, effectKey: 'war_rage' },
+    war_carrasco_golpe_sacrificio: { id: 'war_carrasco_golpe_sacrificio', classId: 'knight', name: 'Golpe de Sacrificio', cooldownMs: 9500, target: 'mob', range: 100, power: 2.1, hpCostPct: 0.12, effectKey: 'war_sacrifice' },
+    war_carrasco_aniquilacao: { id: 'war_carrasco_aniquilacao', classId: 'knight', name: 'Aniquilacao', cooldownMs: 12000, target: 'mob', range: 115, power: 1.4, lostHpScale: 1.4, effectKey: 'war_execute' },
+
+    arc_patrulheiro_tiro_ofuscante: { id: 'arc_patrulheiro_tiro_ofuscante', classId: 'archer', name: 'Tiro Ofuscante', cooldownMs: 6500, target: 'mob', range: 420, power: 1.35, effectKey: 'arc_flash' },
+    arc_patrulheiro_foco_distante: { id: 'arc_patrulheiro_foco_distante', classId: 'archer', name: 'Foco Distante', cooldownMs: 12000, target: 'self', buff: { id: 'foco_distante', durationMs: 12000, attackMul: 1.12 }, effectKey: 'arc_focus' },
+    arc_patrulheiro_abrolhos: { id: 'arc_patrulheiro_abrolhos', classId: 'archer', name: 'Abrolhos', cooldownMs: 8500, target: 'mob', range: 360, power: 1.1, effectKey: 'arc_root' },
+    arc_patrulheiro_salva_flechas: { id: 'arc_patrulheiro_salva_flechas', classId: 'archer', name: 'Salva de Flechas', cooldownMs: 11000, target: 'mob', range: 420, power: 1.05, aoeRadius: 180, effectKey: 'arc_volley' },
+    arc_patrulheiro_passo_vento: { id: 'arc_patrulheiro_passo_vento', classId: 'archer', name: 'Passo de Vento', cooldownMs: 13000, target: 'self', buff: { id: 'passo_vento', durationMs: 10000, moveMul: 1.22 }, effectKey: 'arc_wind' },
+
+    arc_franco_flecha_debilitante: { id: 'arc_franco_flecha_debilitante', classId: 'archer', name: 'Flecha Debilitante', cooldownMs: 7000, target: 'mob', range: 430, power: 1.45, effectKey: 'arc_weaken' },
+    arc_franco_ponteira_envenenada: { id: 'arc_franco_ponteira_envenenada', classId: 'archer', name: 'Ponteira Envenenada', cooldownMs: 7500, target: 'mob', range: 430, power: 1.35, effectKey: 'arc_poison' },
+    arc_franco_olho_aguia: { id: 'arc_franco_olho_aguia', classId: 'archer', name: 'Olho de Aguia', cooldownMs: 13000, target: 'self', buff: { id: 'olho_aguia', durationMs: 15000, critAdd: 0.2 }, effectKey: 'arc_crit' },
+    arc_franco_disparo_perfurante: { id: 'arc_franco_disparo_perfurante', classId: 'archer', name: 'Disparo Perfurante', cooldownMs: 9000, target: 'mob', range: 450, power: 1.7, effectKey: 'arc_pierce' },
+    arc_franco_tiro_misericordia: { id: 'arc_franco_tiro_misericordia', classId: 'archer', name: 'Tiro de Misericordia', cooldownMs: 12000, target: 'mob', range: 450, power: 1.2, lostHpScale: 1.4, effectKey: 'arc_finisher' },
+
+    dru_preservador_florescer: { id: 'dru_preservador_florescer', classId: 'druid', name: 'Florescer', cooldownMs: 9000, target: 'self', healVitScale: 1.2, effectKey: 'dru_bloom' },
+    dru_preservador_casca_ferro: { id: 'dru_preservador_casca_ferro', classId: 'druid', name: 'Casca de Ferro', cooldownMs: 12000, target: 'self', buff: { id: 'casca_ferro', durationMs: 11000, defenseMul: 1.28 }, effectKey: 'dru_bark' },
+    dru_preservador_emaranhado: { id: 'dru_preservador_emaranhado', classId: 'druid', name: 'Emaranhado', cooldownMs: 8500, target: 'mob', range: 360, power: 1.2, aoeRadius: 140, magic: true, effectKey: 'dru_root' },
+    dru_preservador_prece_natureza: { id: 'dru_preservador_prece_natureza', classId: 'druid', name: 'Prece da Natureza', cooldownMs: 14500, target: 'self', healVitScale: 2.2, effectKey: 'dru_prayer' },
+    dru_preservador_avatar_espiritual: { id: 'dru_preservador_avatar_espiritual', classId: 'druid', name: 'Avatar Espiritual', cooldownMs: 18000, target: 'self', buff: { id: 'avatar_espiritual', durationMs: 10000, attackMul: 1.2, moveMul: 1.08, attackSpeedMul: 1.12 }, effectKey: 'dru_avatar' },
+
+    dru_primal_espinhos: { id: 'dru_primal_espinhos', classId: 'druid', name: 'Espinhos', cooldownMs: 12000, target: 'self', buff: { id: 'espinhos', durationMs: 12000, reflect: 0.15 }, effectKey: 'dru_thorns' },
+    dru_primal_enxame: { id: 'dru_primal_enxame', classId: 'druid', name: 'Enxame', cooldownMs: 8500, target: 'mob', range: 370, power: 1.35, magic: true, effectKey: 'dru_swarm' },
+    dru_primal_patada_sombria: { id: 'dru_primal_patada_sombria', classId: 'druid', name: 'Patada Sombria', cooldownMs: 7500, target: 'mob', range: 320, power: 1.5, magic: true, effectKey: 'dru_shadow_claw' },
+    dru_primal_nevoa_obscura: { id: 'dru_primal_nevoa_obscura', classId: 'druid', name: 'Nevoa Obscura', cooldownMs: 11000, target: 'mob', range: 360, power: 1.25, aoeRadius: 160, magic: true, effectKey: 'dru_mist' },
+    dru_primal_invocacao_primal: { id: 'dru_primal_invocacao_primal', classId: 'druid', name: 'Invocacao Primal', cooldownMs: 16000, target: 'mob', range: 360, power: 2.0, magic: true, effectKey: 'dru_primal' },
+
+    ass_agil_reflexos: { id: 'ass_agil_reflexos', classId: 'assassin', name: 'Reflexos', cooldownMs: 11000, target: 'self', buff: { id: 'reflexos', durationMs: 12000, moveMul: 1.2, evasionAdd: 18 }, effectKey: 'ass_reflex' },
+    ass_agil_contra_ataque: { id: 'ass_agil_contra_ataque', classId: 'assassin', name: 'Contra-Ataque', cooldownMs: 9000, target: 'mob', range: 115, power: 1.55, effectKey: 'ass_counter' },
+    ass_agil_passo_fantasma: { id: 'ass_agil_passo_fantasma', classId: 'assassin', name: 'Passo Fantasma', cooldownMs: 8000, target: 'mob', range: 220, power: 1.45, effectKey: 'ass_dash' },
+    ass_agil_golpe_nervos: { id: 'ass_agil_golpe_nervos', classId: 'assassin', name: 'Golpe de Nervos', cooldownMs: 9000, target: 'mob', range: 120, power: 1.35, effectKey: 'ass_nerve' },
+    ass_agil_miragem: { id: 'ass_agil_miragem', classId: 'assassin', name: 'Miragem', cooldownMs: 14000, target: 'mob', range: 130, power: 1.9, effectKey: 'ass_mirage' },
+
+    ass_letal_expor_fraqueza: { id: 'ass_letal_expor_fraqueza', classId: 'assassin', name: 'Expor Fraqueza', cooldownMs: 12000, target: 'self', buff: { id: 'fraqueza', durationMs: 5000, critAdd: 0.25 }, effectKey: 'ass_expose' },
+    ass_letal_ocultar: { id: 'ass_letal_ocultar', classId: 'assassin', name: 'Ocultar', cooldownMs: 18000, target: 'self', buff: { id: 'ocultar', durationMs: 30000, stealth: true, moveMul: 1.08 }, effectKey: 'ass_stealth' },
+    ass_letal_emboscada: { id: 'ass_letal_emboscada', classId: 'assassin', name: 'Emboscada', cooldownMs: 10000, target: 'mob', range: 150, power: 2.6, effectKey: 'ass_ambush' },
+    ass_letal_bomba_fumaca: { id: 'ass_letal_bomba_fumaca', classId: 'assassin', name: 'Bomba de Fumaca', cooldownMs: 13000, target: 'mob', range: 250, power: 1.15, aoeRadius: 140, effectKey: 'ass_smoke' },
+    ass_letal_sentenca: { id: 'ass_letal_sentenca', classId: 'assassin', name: 'Sentenca', cooldownMs: 15000, target: 'mob', range: 320, power: 2.2, effectKey: 'ass_sentence' },
+
+    mod_fire_wing: { id: 'mod_fire_wing', classId: 'druid', name: 'Asa de Fogo', cooldownMs: 8000, target: 'mob', range: 360, power: 1.8, magic: true, aoeRadius: 110, effectKey: 'mod_fire_wing' },
+    class_primary: { id: 'class_primary', classId: 'knight', name: 'Ataque Primario', cooldownMs: 2200, target: 'mob', range: 100, power: 1.2, effectKey: 'class_primary' }
+};
+
+const SKILL_CHAINS: Record<string, string[]> = {
+    war_bastion: ['war_bastion_escudo_fe', 'war_bastion_muralha', 'war_bastion_renovacao', 'war_bastion_inabalavel', 'war_bastion_impacto_sismico'],
+    war_carrasco: ['war_carrasco_frenesi', 'war_carrasco_lacerar', 'war_carrasco_ira', 'war_carrasco_golpe_sacrificio', 'war_carrasco_aniquilacao'],
+    arc_patrulheiro: ['arc_patrulheiro_tiro_ofuscante', 'arc_patrulheiro_foco_distante', 'arc_patrulheiro_abrolhos', 'arc_patrulheiro_salva_flechas', 'arc_patrulheiro_passo_vento'],
+    arc_franco: ['arc_franco_flecha_debilitante', 'arc_franco_ponteira_envenenada', 'arc_franco_olho_aguia', 'arc_franco_disparo_perfurante', 'arc_franco_tiro_misericordia'],
+    dru_preservador: ['dru_preservador_florescer', 'dru_preservador_casca_ferro', 'dru_preservador_emaranhado', 'dru_preservador_prece_natureza', 'dru_preservador_avatar_espiritual'],
+    dru_primal: ['dru_primal_espinhos', 'dru_primal_enxame', 'dru_primal_patada_sombria', 'dru_primal_nevoa_obscura', 'dru_primal_invocacao_primal'],
+    ass_agil: ['ass_agil_reflexos', 'ass_agil_contra_ataque', 'ass_agil_passo_fantasma', 'ass_agil_golpe_nervos', 'ass_agil_miragem'],
+    ass_letal: ['ass_letal_expor_fraqueza', 'ass_letal_ocultar', 'ass_letal_emboscada', 'ass_letal_bomba_fumaca', 'ass_letal_sentenca']
+};
+
 export class GameController {
     private persistence: PersistenceService;
     private mobService: MobService;
@@ -139,15 +245,11 @@ export class GameController {
         }
     }
 
-    private async handleRegister(ws: any, msg: AuthMessage) {
+    private async handleRegister(ws: AuthSocket, msg: AuthMessage) {
         const username = String(msg.username || '').trim().toLowerCase();
         const password = String(msg.password || '');
-        const name = String(msg.name || '').trim();
-        const selectedClass = this.normalizeClassId(msg.class);
-        const gender = 'male';
-
-        if (username.length < 3 || password.length < 3 || name.length < 3) {
-            ws.send(JSON.stringify({ type: 'auth_error', message: 'Preencha usuario, senha e nome com ao menos 3 caracteres.' }));
+        if (username.length < 3 || password.length < 3) {
+            ws.send(JSON.stringify({ type: 'auth_error', message: 'Preencha usuario e senha com ao menos 3 caracteres.' }));
             return;
         }
 
@@ -157,15 +259,227 @@ export class GameController {
             return;
         }
 
-        const existingPlayer = await this.persistence.getPlayerByName(name);
-        if (existingPlayer) {
-            ws.send(JSON.stringify({ type: 'auth_error', message: 'Ja existe um personagem com esse nome.' }));
-            return;
-        }
+        await this.persistence.createUser(username, password);
+        ws.send(JSON.stringify({ type: 'auth_ok', message: 'Registro concluido. Agora faca login.' }));
+    }
 
+    private async handleLogin(ws: AuthSocket, msg: AuthMessage) {
+        const username = String(msg.username || '').trim().toLowerCase();
+        const password = String(msg.password || '');
+
+        try {
+            const account = await this.persistence.getUser(username);
+
+            if (!account) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Usuario ou senha invalidos.' }));
+                return;
+            }
+
+            const incomingHash = hashPassword(password, account.salt);
+            if (incomingHash !== account.passwordHash) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Usuario ou senha invalidos.' }));
+                return;
+            }
+
+            if (this.usernameToPlayerId.has(username)) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Esse usuario ja esta online.' }));
+                return;
+            }
+
+            ws.authUserId = String(account.id);
+            ws.authUsername = username;
+            const characters = Array.isArray((account as any).players) ? (account as any).players : [];
+            ws.authRole = characters.some((ch: any) => ch?.role === 'adm') ? 'adm' : 'player';
+            ws.pendingPlayerProfiles = characters;
+
+            if (!characters.length) {
+                ws.send(JSON.stringify({
+                    type: 'auth_character_required',
+                    message: 'Conta criada. Crie seu personagem para continuar.'
+                }));
+                logEvent('INFO', 'user_login_waiting_character', { username });
+                return;
+            }
+
+            this.sendCharacterSelection(ws, characters);
+            logEvent('INFO', 'user_login_character_select', { username, characters: characters.length });
+        } catch (error) {
+            logEvent('ERROR', 'login_error', { username, error: String(error) });
+            ws.send(JSON.stringify({ type: 'auth_error', message: 'Erro ao fazer login.' }));
+        }
+    }
+
+    private sendCharacterSelection(ws: AuthSocket, profiles: any[]) {
+        const slots = [null, null, null] as Array<any>;
+        const maxSlots = 3;
+        for (const profile of Array.isArray(profiles) ? profiles : []) {
+            const slot = Number(profile?.slot);
+            if (!Number.isInteger(slot) || slot < 0 || slot >= maxSlots) continue;
+            slots[slot] = {
+                slot,
+                id: Number(profile.id),
+                name: String(profile.name || ''),
+                class: this.normalizeClassId(profile.class),
+                gender: String(profile.gender || 'male'),
+                level: Math.max(1, Number(profile.level || 1))
+            };
+        }
+        ws.send(JSON.stringify({
+            type: 'auth_character_select',
+            slots,
+            maxSlots
+        }));
+    }
+
+    async handleCharacterCreate(ws: AuthSocket, msg: { name?: string; class?: string; gender?: string }) {
+        try {
+            if (!ws.authUserId || !ws.authUsername) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Faca login antes de criar personagem.' }));
+                return;
+            }
+
+            const account = await this.persistence.getUserById(String(ws.authUserId));
+            if (!account) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Sessao invalida. Faca login novamente.' }));
+                return;
+            }
+
+            const characters = Array.isArray((account as any).players) ? (account as any).players : [];
+            ws.pendingPlayerProfiles = characters;
+            const maxSlots = 3;
+            if (characters.length >= maxSlots) {
+                ws.send(JSON.stringify({
+                    type: 'auth_error',
+                    message: 'Sua conta ja atingiu o limite de 3 personagens.'
+                }));
+                this.sendCharacterSelection(ws, characters);
+                return;
+            }
+
+            const name = String(msg?.name || '').trim();
+            const normalizedName = name.replace(/\s+/g, ' ');
+            const selectedClass = this.normalizeClassId(msg?.class);
+            const gender = String(msg?.gender || 'male').toLowerCase() === 'female' ? 'female' : 'male';
+            const validName = /^[a-zA-Z0-9_ ]{3,12}$/;
+
+            if (!validName.test(normalizedName)) {
+                ws.send(JSON.stringify({
+                    type: 'auth_error',
+                    message: 'Nome invalido. Use 3-12 caracteres (letras, numeros, espaco ou _).'
+                }));
+                return;
+            }
+
+            const existingPlayer = await this.persistence.getPlayerByName(normalizedName);
+            if (existingPlayer) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Ja existe um personagem com esse nome.' }));
+                return;
+            }
+
+            const usedSlots = new Set(characters.map((ch: any) => Number(ch?.slot)).filter((v: number) => Number.isInteger(v)));
+            let freeSlot = -1;
+            for (let i = 0; i < maxSlots; i++) {
+                if (!usedSlots.has(i)) {
+                    freeSlot = i;
+                    break;
+                }
+            }
+            if (freeSlot === -1) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Nao ha slot livre para novo personagem.' }));
+                this.sendCharacterSelection(ws, characters);
+                return;
+            }
+
+            const profile = this.buildNewPlayerProfile(ws.authUsername, normalizedName, selectedClass, gender);
+            const created = await this.persistence.createPlayerForUser(String(ws.authUserId), freeSlot, profile);
+            const nextCharacters = [...characters, created].sort((a: any, b: any) => Number(a.slot || 0) - Number(b.slot || 0));
+            ws.pendingPlayerProfiles = nextCharacters;
+            ws.authRole = nextCharacters.some((ch: any) => ch?.role === 'adm') ? 'adm' : 'player';
+            this.sendCharacterSelection(ws, nextCharacters);
+        } catch (error) {
+            ws.send(JSON.stringify({ type: 'auth_error', message: 'Nao foi possivel criar personagem.' }));
+            logEvent('ERROR', 'character_create_error', { error: String(error), userId: ws.authUserId || null });
+        }
+    }
+
+    async handleCharacterEnter(ws: AuthSocket, msg: { slot?: number }) {
+        try {
+            if (!ws.authUserId || !ws.authUsername) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Faca login antes de entrar.' }));
+                return;
+            }
+
+            const username = ws.authUsername;
+            if (this.usernameToPlayerId.has(username)) {
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Esse usuario ja esta online.' }));
+                return;
+            }
+
+            const account = await this.persistence.getUserById(String(ws.authUserId));
+            const characters = Array.isArray((account as any)?.players)
+                ? (account as any).players
+                : (Array.isArray(ws.pendingPlayerProfiles) ? ws.pendingPlayerProfiles : []);
+            if (!characters.length) {
+                ws.send(JSON.stringify({ type: 'auth_character_required', message: 'Crie um personagem para continuar.' }));
+                return;
+            }
+
+            const requestedSlot = Number(msg?.slot);
+            const profile = Number.isInteger(requestedSlot)
+                ? characters.find((ch: any) => Number(ch?.slot) === requestedSlot)
+                : characters[0];
+            if (!profile) {
+                this.sendCharacterSelection(ws, characters);
+                ws.send(JSON.stringify({ type: 'auth_error', message: 'Slot de personagem invalido.' }));
+                return;
+            }
+
+            const player = this.createRuntimePlayer(username, profile);
+            player.ws = ws as any;
+            this.players.set(player.id, player);
+            this.usernameToPlayerId.set(username, player.id);
+            ws.playerId = player.id;
+
+            ws.send(JSON.stringify({
+                type: 'auth_success',
+                playerId: player.id,
+                world: WORLD,
+                role: player.role,
+                statusIds: STATUS_IDS,
+                hotbarBindings: this.getPlayerHotbarBindings(player)
+            }));
+            ws.send(JSON.stringify({
+                type: 'hotbar.state',
+                bindings: this.getPlayerHotbarBindings(player)
+            }));
+            ws.send(JSON.stringify({
+                type: 'inventory_state',
+                inventory: player.inventory,
+                equippedWeaponId: player.equippedWeaponId
+            }));
+            ws.send(JSON.stringify(this.buildWorldSnapshot(player.mapId, player.mapKey)));
+            this.sendPartyStateToPlayer(player, null);
+            this.sendPartyAreaList(player);
+            if (player.role === 'adm') {
+                this.sendRaw(player.ws, {
+                    type: 'admin.mobPeacefulState',
+                    enabled: this.mobsPeacefulMode
+                });
+            }
+            await this.hydrateFriendStateForPlayer(player);
+            this.sendFriendState(player);
+            ws.pendingPlayerProfiles = [];
+            logEvent('INFO', 'user_login', { username, playerId: player.id });
+        } catch (error) {
+            ws.send(JSON.stringify({ type: 'auth_error', message: 'Nao foi possivel entrar no personagem.' }));
+            logEvent('ERROR', 'character_enter_error', { error: String(error), userId: ws.authUserId || null });
+        }
+    }
+
+    private buildNewPlayerProfile(username: string, name: string, selectedClass: string, gender: 'male' | 'female') {
         const baseStats = this.buildClassBaseStats(selectedClass);
-        const isSena = username === 'sena' || name.toLowerCase() === 'sena';
-        const profile = {
+        const isSena = String(username || '').toLowerCase() === 'sena' || String(name || '').toLowerCase() === 'sena';
+        return {
             name,
             class: selectedClass,
             gender,
@@ -192,69 +506,6 @@ export class GameController {
             baseStats,
             stats: {}
         };
-
-        await this.persistence.createUser(username, password, profile);
-        ws.send(JSON.stringify({ type: 'auth_ok', message: 'Registro concluido. Agora faca login.' }));
-    }
-
-    private async handleLogin(ws: any, msg: AuthMessage) {
-        const username = String(msg.username || '').trim().toLowerCase();
-        const password = String(msg.password || '');
-
-        try {
-            const account = await this.persistence.getUser(username);
-
-            if (!account || !account.player) {
-                ws.send(JSON.stringify({ type: 'auth_error', message: 'Usuario ou senha invalidos.' }));
-                return;
-            }
-
-            const incomingHash = hashPassword(password, account.salt);
-            if (incomingHash !== account.passwordHash) {
-                ws.send(JSON.stringify({ type: 'auth_error', message: 'Usuario ou senha invalidos.' }));
-                return;
-            }
-
-            if (this.usernameToPlayerId.has(username)) {
-                ws.send(JSON.stringify({ type: 'auth_error', message: 'Esse usuario ja esta online.' }));
-                return;
-            }
-
-            const player = this.createRuntimePlayer(username, account.player);
-            player.ws = ws;
-            this.players.set(player.id, player);
-            this.usernameToPlayerId.set(username, player.id);
-            ws.playerId = player.id;
-
-            ws.send(JSON.stringify({
-                type: 'auth_success',
-                playerId: player.id,
-                world: WORLD,
-                role: player.role,
-                statusIds: STATUS_IDS
-            }));
-            ws.send(JSON.stringify({
-                type: 'inventory_state',
-                inventory: player.inventory,
-                equippedWeaponId: player.equippedWeaponId
-            }));
-            ws.send(JSON.stringify(this.buildWorldSnapshot(player.mapId, player.mapKey)));
-            this.sendPartyStateToPlayer(player, null);
-            this.sendPartyAreaList(player);
-            if (player.role === 'adm') {
-                this.sendRaw(player.ws, {
-                    type: 'admin.mobPeacefulState',
-                    enabled: this.mobsPeacefulMode
-                });
-            }
-            await this.hydrateFriendStateForPlayer(player);
-            this.sendFriendState(player);
-
-            logEvent('INFO', 'user_login', { username, playerId: player.id });
-        } catch (error) {
-            logEvent('ERROR', 'login_error', { username, error: String(error) });
-            ws.send(JSON.stringify({ type: 'auth_error', message: 'Erro ao fazer login.' }));
-        }
     }
 
     private createRuntimePlayer(username: string, profile: any): PlayerRuntime {
@@ -307,6 +558,8 @@ export class GameController {
             deathY: spawn.y,
             partyId: null,
             skillCooldowns: {},
+            skillLevels: this.normalizeSkillLevels(profile?.statusOverrides?.__skillLevels || {}),
+            activeSkillEffects: [],
             movePath: [],
             nextPathfindAt: 0,
             pathDestinationX: spawn.x,
@@ -437,6 +690,15 @@ export class GameController {
         this.sendInventoryState(player);
     }
 
+    handleHotbarSet(player: PlayerRuntime, msg: any) {
+        const raw = msg && typeof msg.bindings === 'object' ? msg.bindings : null;
+        if (!raw) return;
+        const normalized = this.normalizeHotbarBindings(raw);
+        if (!player.statusOverrides || typeof player.statusOverrides !== 'object') player.statusOverrides = {};
+        player.statusOverrides.__hotbarBindings = normalized;
+        this.persistPlayer(player);
+    }
+
     handleEquipItem(player: PlayerRuntime, msg: any) {
         const itemId = msg.itemId ? String(msg.itemId) : null;
         if (!itemId) {
@@ -485,6 +747,37 @@ export class GameController {
 
         const occupant = player.inventory.find((it: any) => it.slotIndex === toSlot);
         const fromSlot = item.slotIndex;
+
+        if (occupant && occupant.id !== item.id && this.canItemsStack(occupant, item)) {
+            const max = Math.min(this.getItemMaxStack(occupant), this.getItemMaxStack(item));
+            const occupantQty = Math.max(1, Math.floor(Number(occupant.quantity || 1)));
+            const itemQty = Math.max(1, Math.floor(Number(item.quantity || 1)));
+            const room = Math.max(0, max - occupantQty);
+
+            if (room > 0) {
+                const moved = Math.min(room, itemQty);
+                occupant.quantity = occupantQty + moved;
+                occupant.stackable = true;
+                occupant.maxStack = max;
+
+                const remaining = itemQty - moved;
+                if (remaining <= 0) {
+                    const idx = player.inventory.findIndex((it: any) => it.id === item.id);
+                    if (idx !== -1) player.inventory.splice(idx, 1);
+                } else {
+                    item.quantity = remaining;
+                    item.stackable = true;
+                    item.maxStack = max;
+                    item.slotIndex = fromSlot;
+                }
+
+                player.inventory = this.normalizeInventorySlots(player.inventory, player.equippedWeaponId);
+                this.persistPlayer(player);
+                this.sendInventoryState(player);
+                return;
+            }
+        }
+
         item.slotIndex = toSlot;
         if (occupant && occupant.id !== item.id) occupant.slotIndex = fromSlot;
 
@@ -555,11 +848,23 @@ export class GameController {
         const index = player.inventory.findIndex((it: any) => String(it?.id || '') === itemId);
         if (index === -1) return;
         const item = player.inventory[index];
-        if (String(item?.type || '') !== 'potion_hp') return;
+        const itemType = String(item?.type || '');
+        if (itemType !== 'potion_hp' && itemType !== 'skill_reset_hourglass') return;
 
-        const healPercent = Number.isFinite(Number(item?.healPercent)) ? Number(item.healPercent) : Number(HP_POTION_TEMPLATE.healPercent || 0.5);
-        const amount = Math.max(1, Math.floor(Number(player.maxHp || 1) * Math.max(0, healPercent)));
-        player.hp = clamp(Number(player.hp || 0) + amount, 1, Number(player.maxHp || 1));
+        let returnedPoints = 0;
+        if (itemType === 'potion_hp') {
+            const healPercent = Number.isFinite(Number(item?.healPercent)) ? Number(item.healPercent) : Number(HP_POTION_TEMPLATE.healPercent || 0.5);
+            const amount = Math.max(1, Math.floor(Number(player.maxHp || 1) * Math.max(0, healPercent)));
+            player.hp = clamp(Number(player.hp || 0) + amount, 1, Number(player.maxHp || 1));
+        } else {
+            returnedPoints = this.getSpentSkillPoints(player);
+            player.skillLevels = {};
+            if (!player.statusOverrides || typeof player.statusOverrides !== 'object') player.statusOverrides = {};
+            player.statusOverrides.__skillLevels = {};
+            player.skillCooldowns = {};
+            player.activeSkillEffects = [];
+            this.recomputePlayerStats(player);
+        }
         const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
         if (quantity > 1) {
             item.quantity = quantity - 1;
@@ -571,6 +876,12 @@ export class GameController {
         this.persistPlayer(player);
         this.sendInventoryState(player);
         this.sendStatsUpdated(player);
+        if (itemType === 'skill_reset_hourglass') {
+            this.sendRaw(player.ws, {
+                type: 'system_message',
+                text: `Ampulheta usada: habilidades resetadas e ${returnedPoints} ponto(s) devolvido(s).`
+            });
+        }
     }
 
     async handleAdminCommand(player: PlayerRuntime, msg: any) {
@@ -1427,89 +1738,195 @@ export class GameController {
     handleSkillCast(player: PlayerRuntime, msg: any) {
         if (player.dead || player.hp <= 0) return;
         const skillId = String(msg?.skillId || '');
-        const allowedSkillIds = new Set([
-            'class_primary',
-            'holy_strike_1',
-            'holy_strike_2',
-            'holy_strike_3',
-            'holy_burst_1',
-            'holy_burst_2',
-            'holy_burst_3',
-            'blood_cut_1',
-            'blood_cut_2',
-            'blood_cut_3',
-            'mod_fire_wing'
-        ]);
-        if (!allowedSkillIds.has(skillId)) return;
+        const skill = SKILL_DEFS[skillId];
+        if (!skill) return;
+        const skillLevel = skillId === 'class_primary' || skillId === 'mod_fire_wing' ? 1 : this.getSkillLevel(player, skillId);
+        if (skillId !== 'class_primary' && skillId !== 'mod_fire_wing' && skillLevel <= 0) {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Habilidade nao aprendida.' });
+            return;
+        }
 
         const now = Date.now();
         player.skillCooldowns = player.skillCooldowns || {};
         const classId = this.normalizeClassId(player.class);
-        const cooldownByClass: Record<string, number> = { knight: 2800, druid: 2200, assassin: 1800, archer: 1800 };
-        const cooldownMs = cooldownByClass[classId] || 2200;
+        const normalizedClass = classId === 'bandit' ? 'assassin' : classId === 'shifter' ? 'druid' : classId;
+        const classMismatch = skill.id !== 'class_primary'
+            && skill.id !== 'mod_fire_wing'
+            && normalizedClass !== skill.classId;
+        if (classMismatch) {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Essa habilidade nao pertence a sua classe.' });
+            return;
+        }
+        this.pruneExpiredSkillEffects(player, now);
+        const cooldownMs = Math.max(400, Number(skill.cooldownMs || 2000));
         const nextAt = Number(player.skillCooldowns[skillId] || 0);
         if (now < nextAt) {
             this.sendRaw(player.ws, { type: 'system_message', text: `Habilidade em recarga (${Math.ceil((nextAt - now) / 1000)}s).` });
             return;
         }
+        const hpBeforeCast = Number(player.hp || 0);
 
-        const targetMobId = String(msg?.targetMobId || player.attackTargetId || '');
-        const mapInstanceId = this.mapInstanceId(player.mapKey, player.mapId);
-        const targetMob = this.mobService.getMobs().find((m) => m.id === targetMobId && m.mapId === mapInstanceId);
-        if (!targetMob) {
-            this.sendRaw(player.ws, { type: 'system_message', text: 'Selecione um alvo para usar a habilidade.' });
-            return;
-        }
-
-        const currentDistance = distance(player, targetMob);
-        const edgeDistance = currentDistance - (targetMob.size / 2 + PLAYER_HALF_SIZE);
-
-        if (classId === 'knight') {
-            const range = 90;
-            if (edgeDistance > range) {
-                this.sendRaw(player.ws, { type: 'system_message', text: 'Muito longe para Golpe Circular.' });
+        let targetMob: any = null;
+        let mapInstanceId = '';
+        if (skill.target === 'mob') {
+            const targetMobId = String(msg?.targetMobId || player.attackTargetId || '');
+            mapInstanceId = this.mapInstanceId(player.mapKey, player.mapId);
+            targetMob = this.mobService.getMobs().find((m) => m.id === targetMobId && m.mapId === mapInstanceId);
+            if (!targetMob) {
+                this.sendRaw(player.ws, { type: 'system_message', text: 'Selecione um alvo para usar a habilidade.' });
                 return;
             }
-            player.skillCooldowns[skillId] = now + cooldownMs;
-            const mobsInRange = this.mobService.getMobsByMap(mapInstanceId).filter((m) => {
-                const d = distance({ x: targetMob.x, y: targetMob.y } as any, m);
-                return d <= 145;
-            });
-            for (const mob of mobsInRange) {
-                const dmg = this.computeMobDamage(player, mob, 1.45);
-                this.applyDamageToMobAndHandleDeath(player, mob, dmg, now);
-                this.broadcastMobHit(player, mob);
-            }
-            player.lastCombatAt = now;
-            return;
-        }
 
-        if (classId === 'druid') {
-            const range = 420;
+            const currentDistance = distance(player, targetMob);
+            const edgeDistance = currentDistance - (targetMob.size / 2 + PLAYER_HALF_SIZE);
+            const range = Number(skill.range || 100);
             if (edgeDistance > range) {
-                this.sendRaw(player.ws, { type: 'system_message', text: 'Muito longe para Martelo Arcano.' });
+                this.sendRaw(player.ws, { type: 'system_message', text: 'Muito longe para usar esta habilidade.' });
                 return;
             }
-            player.skillCooldowns[skillId] = now + cooldownMs;
-            const dmg = this.computeMobDamage(player, targetMob, 1.7, true);
-            this.applyDamageToMobAndHandleDeath(player, targetMob, dmg, now);
-            this.broadcastMobHit(player, targetMob);
-            player.lastCombatAt = now;
-            return;
         }
 
-        // assassin / archer
-        const range = 100;
-        if (edgeDistance > range) {
-            this.sendRaw(player.ws, { type: 'system_message', text: 'Muito longe para Corte Duplo.' });
-            return;
+        if (skill.hpCostPct && skill.hpCostPct > 0) {
+            const hpCost = Math.max(1, Math.floor(Number(player.maxHp || 1) * Number(skill.hpCostPct)));
+            if (player.hp <= hpCost) {
+                this.sendRaw(player.ws, { type: 'system_message', text: 'HP insuficiente para usar esta habilidade.' });
+                return;
+            }
+            player.hp = Math.max(1, player.hp - hpCost);
         }
         player.skillCooldowns[skillId] = now + cooldownMs;
-        const first = this.computeMobDamage(player, targetMob, 1.2);
-        const second = this.computeMobDamage(player, targetMob, 1.05);
-        this.applyDamageToMobAndHandleDeath(player, targetMob, first + second, now);
-        this.broadcastMobHit(player, targetMob);
+
+        if (skill.healVitScale && skill.healVitScale > 0) {
+            const vit = Number(player.stats?.vit || 0);
+            const healScale = Number(skill.healVitScale) * (1 + (skillLevel - 1) * 0.2);
+            const heal = Math.max(10, Math.floor(vit * healScale + Number(player.maxHp || 0) * (0.08 + (skillLevel - 1) * 0.01)));
+            player.hp = Math.min(Number(player.maxHp || player.hp), Number(player.hp || 0) + heal);
+            this.sendSkillEffect(player.mapKey, player.mapId, {
+                sourceId: player.id,
+                targetId: player.id,
+                x: player.x,
+                y: player.y,
+                effectKey: skill.effectKey || skill.id
+            });
+        }
+
+        if (skill.buff) {
+            this.applyTimedSkillEffect(player, skill.buff, now);
+            this.sendSkillEffect(player.mapKey, player.mapId, {
+                sourceId: player.id,
+                targetId: player.id,
+                x: player.x,
+                y: player.y,
+                effectKey: skill.effectKey || skill.id
+            });
+        }
+
+        if (skill.target === 'self') {
+            if (Number(player.hp || 0) !== hpBeforeCast) this.sendStatsUpdated(player);
+            return;
+        }
+
+        const basePower = Math.max(0.05, this.getSkillPowerWithLevel(skill, skillLevel));
+        const hpLostRatio = Number(player.maxHp || 1) > 0
+            ? Math.max(0, Math.min(1, (Number(player.maxHp || 1) - Number(player.hp || 0)) / Number(player.maxHp || 1)))
+            : 0;
+        const scaledPower = skill.lostHpScale
+            ? basePower * (1 + hpLostRatio * Number(skill.lostHpScale || 0))
+            : basePower;
+
+        if (skill.aoeRadius && skill.aoeRadius > 0) {
+            const mobsInRange = this.mobService.getMobsByMap(mapInstanceId).filter((m) => {
+                const d = distance({ x: targetMob.x, y: targetMob.y } as any, m);
+                return d <= Number(skill.aoeRadius);
+            });
+            for (const mob of mobsInRange) {
+                const damage = this.computeMobDamage(player, mob, scaledPower, Boolean(skill.magic), now);
+                this.applyDamageToMobAndHandleDeath(player, mob, damage, now);
+                this.broadcastMobHit(player, mob);
+                this.applyOnHitSkillEffects(player, damage, now);
+            }
+        } else {
+            let damage = this.computeMobDamage(player, targetMob, scaledPower, Boolean(skill.magic), now);
+            if (skill.id === 'ass_letal_emboscada' && this.hasActiveSkillEffect(player, 'ocultar', now)) {
+                damage = Math.max(1, Math.floor(damage * 1.45));
+                this.removeSkillEffectById(player, 'ocultar');
+            }
+            this.applyDamageToMobAndHandleDeath(player, targetMob, damage, now);
+            this.broadcastMobHit(player, targetMob);
+            this.applyOnHitSkillEffects(player, damage, now);
+            if (skill.id === 'ass_letal_sentenca') {
+                const delayedDamage = Math.max(1, Math.floor(damage * 0.75));
+                setTimeout(() => {
+                    const liveMob = this.mobService.getMobs().find((m) => m.id === targetMob.id && m.mapId === mapInstanceId);
+                    if (!liveMob || liveMob.hp <= 0) return;
+                    this.applyDamageToMobAndHandleDeath(player, liveMob, delayedDamage, Date.now());
+                    this.broadcastMobHit(player, liveMob);
+                    this.sendSkillEffect(player.mapKey, player.mapId, {
+                        sourceId: player.id,
+                        targetId: liveMob.id,
+                        x: liveMob.x,
+                        y: liveMob.y,
+                        effectKey: 'ass_sentence_drop'
+                    });
+                }, 3000);
+            }
+        }
+
+        this.sendSkillEffect(player.mapKey, player.mapId, {
+            sourceId: player.id,
+            targetId: targetMob.id,
+            x: targetMob.x,
+            y: targetMob.y,
+            effectKey: skill.effectKey || skill.id
+        });
         player.lastCombatAt = now;
+        if (Number(player.hp || 0) !== hpBeforeCast) this.sendStatsUpdated(player);
+    }
+
+    handleSkillLearn(player: PlayerRuntime, msg: any) {
+        const skillId = String(msg?.skillId || '');
+        const skill = SKILL_DEFS[skillId];
+        if (!skill) return;
+        if (skillId === 'class_primary' || skillId === 'mod_fire_wing') {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Essa habilidade nao pode ser evoluida manualmente.' });
+            return;
+        }
+
+        const classId = this.normalizeClassId(player.class);
+        const normalizedClass = classId === 'bandit' ? 'assassin' : classId === 'shifter' ? 'druid' : classId;
+        if (normalizedClass !== skill.classId) {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Essa habilidade nao pertence a sua classe.' });
+            return;
+        }
+
+        const levels = this.normalizeSkillLevels(player.skillLevels || {});
+        const current = Math.max(0, Math.min(5, Number(levels[skillId] || 0)));
+        if (current >= 5) {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Essa habilidade ja esta no nivel maximo.' });
+            return;
+        }
+        const nextLevel = current + 1;
+        const prereq = this.getSkillPrerequisite(skillId);
+        if (prereq) {
+            const prereqLevel = Math.max(0, Math.min(5, Number(levels[prereq] || 0)));
+            if (prereqLevel < 1) {
+                this.sendRaw(player.ws, { type: 'system_message', text: 'Aprenda o pre-requisito antes desta habilidade.' });
+                return;
+            }
+        }
+
+        const skillPointsAvailable = this.getAvailableSkillPoints(player);
+        if (skillPointsAvailable <= 0) {
+            this.sendRaw(player.ws, { type: 'system_message', text: 'Sem pontos de habilidade disponiveis.' });
+            return;
+        }
+
+        levels[skillId] = nextLevel;
+        player.skillLevels = levels;
+        this.recomputePlayerStats(player);
+        this.persistPlayer(player);
+        this.sendRaw(player.ws, { type: 'system_message', text: `${skill.name} evoluiu para nivel ${nextLevel}.` });
+        this.sendStatsUpdated(player);
     }
 
     handleStatsAllocate(player: PlayerRuntime, msg: any) {
@@ -1603,6 +2020,7 @@ export class GameController {
         this.pruneExpiredFriendRequests(now);
         this.processMobAggroAndCombat(deltaSeconds, now);
         for (const player of this.players.values()) {
+            this.pruneExpiredSkillEffects(player, now);
             if (player.dead || player.hp <= 0) continue;
             this.movePlayerTowardTarget(player, deltaSeconds, now);
             this.processPortalCollision(player, now);
@@ -1645,6 +2063,8 @@ export class GameController {
         const player = this.players.get(playerId);
         if (!player) return;
         this.removePlayerFromParty(player);
+        if (!player.statusOverrides || typeof player.statusOverrides !== 'object') player.statusOverrides = {};
+        player.statusOverrides.__skillLevels = this.normalizeSkillLevels(player.skillLevels || {});
         await this.persistence.savePlayer(player);
         this.usernameToPlayerId.delete(player.username);
         this.players.delete(playerId);
@@ -1689,9 +2109,59 @@ export class GameController {
             xp: player.xp,
             xpToNext: xpRequired(player.level),
             stats: player.stats,
+            skillLevels: this.normalizeSkillLevels(player.skillLevels || {}),
+            skillPointsAvailable: this.getAvailableSkillPoints(player),
             allocatedStats: this.normalizeAllocatedStats(player.allocatedStats),
             unspentPoints: Number.isInteger(player.unspentPoints) ? player.unspentPoints : 0
         };
+    }
+
+    private normalizeHotbarBinding(binding: any) {
+        if (!binding || typeof binding !== 'object') return null;
+        const type = String(binding.type || '');
+        if (type === 'action') {
+            const actionId = String(binding.actionId || '');
+            if (actionId === 'basic_attack') return { type: 'action', actionId: 'basic_attack' };
+            if (actionId === 'skill_cast') {
+                const skillId = String(binding.skillId || '');
+                if (!skillId) return null;
+                return {
+                    type: 'action',
+                    actionId: 'skill_cast',
+                    skillId,
+                    skillName: binding.skillName ? String(binding.skillName) : 'Skill'
+                };
+            }
+            return null;
+        }
+        if (type === 'item') {
+            const itemId = binding.itemId ? String(binding.itemId) : '';
+            const itemType = binding.itemType ? String(binding.itemType) : '';
+            if (!itemId && !itemType) return null;
+            return {
+                type: 'item',
+                itemId,
+                itemType,
+                itemName: binding.itemName ? String(binding.itemName) : 'Item'
+            };
+        }
+        return null;
+    }
+
+    private normalizeHotbarBindings(raw: any) {
+        const allowedKeys = ['1', '2', '3', '4', '5', '6', '7', '8', 'q', 'w', 'e', 'r', 'a', 's', 'd', 'f'];
+        const source = raw && typeof raw === 'object' ? raw : {};
+        const out: Record<string, any> = {};
+        for (const key of allowedKeys) {
+            out[key] = this.normalizeHotbarBinding(source[key]);
+        }
+        if (!out['1']) out['1'] = { type: 'action', actionId: 'basic_attack' };
+        return out;
+    }
+
+    private getPlayerHotbarBindings(player: PlayerRuntime) {
+        const raw = player?.statusOverrides?.__hotbarBindings;
+        return this.normalizeHotbarBindings(raw);
     }
 
     private movePlayerTowardTarget(player: PlayerRuntime, deltaSeconds: number, now: number) {
@@ -1704,7 +2174,8 @@ export class GameController {
         }
         const rawMoveSpeed = Number(player.stats?.moveSpeed);
         const moveSpeedStat = Number.isFinite(rawMoveSpeed) && rawMoveSpeed > 0 ? rawMoveSpeed : 100;
-        const speed = BASE_MOVE_SPEED * (moveSpeedStat / 100);
+        const fx = this.getActiveSkillEffectAggregate(player, now);
+        const speed = BASE_MOVE_SPEED * (moveSpeedStat / 100) * Math.max(0.2, Number(fx.moveMul || 1));
         const dx = player.targetX - player.x;
         const dy = player.targetY - player.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1823,9 +2294,11 @@ export class GameController {
         player.pathDestinationX = player.x;
         player.pathDestinationY = player.y;
 
+        const fx = this.getActiveSkillEffectAggregate(player, now);
         const rawAttackSpeed = Number(player.stats?.attackSpeed);
         const attackSpeedStat = Number.isFinite(rawAttackSpeed) && rawAttackSpeed > 0 ? rawAttackSpeed : 100;
-        const attackIntervalMs = 1000 * (100 / attackSpeedStat);
+        const boostedAttackSpeed = attackSpeedStat * Math.max(0.2, Number(fx.attackSpeedMul || 1));
+        const attackIntervalMs = 1000 * (100 / boostedAttackSpeed);
         if (now - player.lastAttackAt < attackIntervalMs) return;
         player.lastAttackAt = now;
 
@@ -1837,8 +2310,10 @@ export class GameController {
             this.broadcastMobHit(player, mob);
             return;
         }
-        const damage = this.computeMobDamage(player, mob, 1);
+        const damage = this.computeMobDamage(player, mob, 1, false, now);
         this.applyDamageToMobAndHandleDeath(player, mob, damage, now);
+        const healed = this.applyOnHitSkillEffects(player, damage, now);
+        if (healed > 0) this.sendStatsUpdated(player);
         player.lastCombatAt = now;
 
         for (const receiver of this.players.values()) {
@@ -1860,9 +2335,10 @@ export class GameController {
 
     }
 
-    private computeMobDamage(player: PlayerRuntime, mob: any, multiplier: number, forceMagic: boolean = false) {
+    private computeMobDamage(player: PlayerRuntime, mob: any, multiplier: number, forceMagic: boolean = false, now: number = Date.now()) {
+        const fx = this.getActiveSkillEffectAggregate(player, now);
         const isMagic = forceMagic || player.stats?.damageType === 'magic';
-        const rawAttack = Number(isMagic ? player.stats?.magicAttack : player.stats?.physicalAttack) || 1;
+        const rawAttack = (Number(isMagic ? player.stats?.magicAttack : player.stats?.physicalAttack) || 1) * Math.max(0.2, Number(fx.attackMul || 1));
         const defense = Number(isMagic ? mob.magicDefense : mob.physicalDefense) || 0;
         const reducedDefense = this.shouldLuckyStrike(player, mob) ? defense * 0.5 : defense;
         const base = Number(rawAttack) * Math.max(0.05, Number(multiplier || 1));
@@ -1885,16 +2361,97 @@ export class GameController {
 
         this.grantXp(player, mob.xpReward);
         const mapInstanceId = this.mapInstanceId(player.mapKey, player.mapId);
-        const dropDefs: Array<'weapon' | 'potion_hp'> = [];
+        const dropDefs: Array<'weapon' | 'potion_hp' | 'skill_reset_hourglass'> = [];
         if (Math.random() < 0.5) dropDefs.push('weapon');
         dropDefs.push('potion_hp');
+        if (Math.random() < Number(SKILL_RESET_HOURGLASS_DROP_CHANCE || 0)) dropDefs.push('skill_reset_hourglass');
         dropDefs.forEach((dropType, index) => {
             const dropPos = this.computeLootDropPosition(mob.x, mob.y, index, dropDefs.length, player.mapKey);
             if (dropType === 'weapon') this.dropWeaponAt(dropPos.x, dropPos.y, mapInstanceId, this.pickRandomWeaponTemplate());
-            else this.dropHpPotionAt(dropPos.x, dropPos.y, mapInstanceId);
+            else if (dropType === 'potion_hp') this.dropHpPotionAt(dropPos.x, dropPos.y, mapInstanceId);
+            else this.dropSkillResetHourglassAt(dropPos.x, dropPos.y, mapInstanceId);
         });
         this.mobService.removeMob(mob.id);
         return true;
+    }
+
+    private pruneExpiredSkillEffects(player: PlayerRuntime, now: number = Date.now()) {
+        if (!Array.isArray(player.activeSkillEffects)) {
+            player.activeSkillEffects = [];
+            return;
+        }
+        player.activeSkillEffects = player.activeSkillEffects.filter((fx: any) => Number(fx?.expiresAt || 0) > now);
+    }
+
+    private hasActiveSkillEffect(player: PlayerRuntime, effectId: string, now: number = Date.now()) {
+        this.pruneExpiredSkillEffects(player, now);
+        return Array.isArray(player.activeSkillEffects)
+            && player.activeSkillEffects.some((fx: any) => String(fx?.id || '') === String(effectId));
+    }
+
+    private removeSkillEffectById(player: PlayerRuntime, effectId: string) {
+        if (!Array.isArray(player.activeSkillEffects)) return;
+        player.activeSkillEffects = player.activeSkillEffects.filter((fx: any) => String(fx?.id || '') !== String(effectId));
+    }
+
+    private getActiveSkillEffectAggregate(player: PlayerRuntime, now: number = Date.now()) {
+        this.pruneExpiredSkillEffects(player, now);
+        const out = {
+            attackMul: 1,
+            defenseMul: 1,
+            magicDefenseMul: 1,
+            moveMul: 1,
+            attackSpeedMul: 1,
+            critAdd: 0,
+            evasionAdd: 0,
+            damageReduction: 0,
+            lifesteal: 0,
+            reflect: 0,
+            stealth: false
+        };
+        for (const fx of player.activeSkillEffects || []) {
+            const data = fx && typeof fx === 'object' ? fx : {};
+            if (Number(data.attackMul) > 0) out.attackMul *= Number(data.attackMul);
+            if (Number(data.defenseMul) > 0) out.defenseMul *= Number(data.defenseMul);
+            if (Number(data.magicDefenseMul) > 0) out.magicDefenseMul *= Number(data.magicDefenseMul);
+            if (Number(data.moveMul) > 0) out.moveMul *= Number(data.moveMul);
+            if (Number(data.attackSpeedMul) > 0) out.attackSpeedMul *= Number(data.attackSpeedMul);
+            if (Number.isFinite(Number(data.critAdd))) out.critAdd += Number(data.critAdd);
+            if (Number.isFinite(Number(data.evasionAdd))) out.evasionAdd += Number(data.evasionAdd);
+            if (Number.isFinite(Number(data.damageReduction))) out.damageReduction = Math.max(out.damageReduction, Number(data.damageReduction));
+            if (Number.isFinite(Number(data.lifesteal))) out.lifesteal = Math.max(out.lifesteal, Number(data.lifesteal));
+            if (Number.isFinite(Number(data.reflect))) out.reflect = Math.max(out.reflect, Number(data.reflect));
+            if (data.stealth) out.stealth = true;
+        }
+        return out;
+    }
+
+    private applyTimedSkillEffect(player: PlayerRuntime, buff: any, now: number = Date.now()) {
+        if (!buff || typeof buff !== 'object') return;
+        if (!Array.isArray(player.activeSkillEffects)) player.activeSkillEffects = [];
+        const id = String(buff.id || randomUUID());
+        const expiresAt = now + Math.max(500, Number(buff.durationMs || 1000));
+        player.activeSkillEffects = player.activeSkillEffects.filter((fx: any) => String(fx?.id || '') !== id);
+        player.activeSkillEffects.push({ ...buff, id, expiresAt });
+    }
+
+    private applyOnHitSkillEffects(player: PlayerRuntime, dealtDamage: number, now: number = Date.now()) {
+        const effects = this.getActiveSkillEffectAggregate(player, now);
+        const lifesteal = Math.max(0, Math.min(0.6, Number(effects.lifesteal || 0)));
+        if (lifesteal <= 0) return 0;
+        const heal = Math.max(1, Math.floor(Number(dealtDamage || 0) * lifesteal));
+        player.hp = Math.min(Number(player.maxHp || player.hp), Number(player.hp || 0) + heal);
+        return heal;
+    }
+
+    private sendSkillEffect(mapKey: string, mapId: string, payload: any) {
+        for (const receiver of this.players.values()) {
+            if (receiver.mapKey !== mapKey || receiver.mapId !== mapId) continue;
+            this.sendRaw(receiver.ws, {
+                type: 'skill.effect',
+                ...payload
+            });
+        }
     }
 
     private broadcastMobHit(player: PlayerRuntime, mob: any) {
@@ -2176,12 +2733,14 @@ export class GameController {
             mob.nextAttackAt = now + Number(template.attackCadenceMs || MOB_ATTACK_INTERVAL_MS);
 
             const baseDamage = mob.kind === 'boss' ? 34 : mob.kind === 'subboss' ? 21 : mob.kind === 'elite' ? 14 : 8;
-            const hitChance = this.computeHitChance(Number(template.accuracy || 60), Number(target.stats?.evasion || 0));
+            const targetFx = this.getActiveSkillEffectAggregate(target, now);
+            const hitChance = this.computeHitChance(Number(template.accuracy || 60), Number(target.stats?.evasion || 0) + Number(targetFx.evasionAdd || 0));
             if (Math.random() > hitChance) continue;
-            const defense = Number(target.stats?.physicalDefense || 0);
+            const defense = Number(target.stats?.physicalDefense || 0) * Math.max(0.1, Number(targetFx.defenseMul || 1));
             const luckyBypass = Math.random() < Number(template.luckyStrikeChance || 0);
             const effectiveDefense = luckyBypass ? defense * 0.5 : defense;
-            const damage = this.computeDamageAfterMitigation(baseDamage, effectiveDefense, Number(target.level || 1));
+            let damage = this.computeDamageAfterMitigation(baseDamage, effectiveDefense, Number(target.level || 1));
+            damage = Math.max(1, Math.floor(damage * (1 - Math.max(0, Math.min(0.95, Number(targetFx.damageReduction || 0))))));
             target.hp = Math.max(0, target.hp - damage);
             target.lastCombatAt = now;
             if (target.hp <= 0) {
@@ -2193,6 +2752,14 @@ export class GameController {
                 target.pvpAutoAttackActive = false;
                 target.attackTargetPlayerId = null;
                 this.sendRaw(target.ws, { type: 'player.dead' });
+            }
+            const reflect = Math.max(0, Math.min(0.5, Number(targetFx.reflect || 0)));
+            if (reflect > 0 && Number(mob.hp || 0) > 0) {
+                const reflected = Math.max(1, Math.floor(damage * reflect));
+                mob.hp = Math.max(0, Number(mob.hp || 0) - reflected);
+                if (mob.hp <= 0) {
+                    this.applyDamageToMobAndHandleDeath(target, mob, reflected, now);
+                }
             }
             this.persistPlayer(target);
             this.syncAllPartyStates();
@@ -2240,25 +2807,34 @@ export class GameController {
             return;
         }
 
+        const fx = this.getActiveSkillEffectAggregate(player, now);
         const rawAttackSpeed = Number(player.stats?.attackSpeed);
         const attackSpeedStat = Number.isFinite(rawAttackSpeed) && rawAttackSpeed > 0 ? rawAttackSpeed : 100;
-        const attackIntervalMs = 1000 * (100 / attackSpeedStat);
+        const boostedAttackSpeed = attackSpeedStat * Math.max(0.2, Number(fx.attackSpeedMul || 1));
+        const attackIntervalMs = 1000 * (100 / boostedAttackSpeed);
         if (now - player.lastAttackAt < attackIntervalMs) return;
         player.lastAttackAt = now;
 
         const hitChance = this.computeHitChance(
             Number(player.stats?.accuracy || 0),
-            Number(target.stats?.evasion || 0)
+            Number(target.stats?.evasion || 0) + Number(this.getActiveSkillEffectAggregate(target, now).evasionAdd || 0)
         );
         if (Math.random() > hitChance) return;
 
         const isMagic = player.stats?.damageType === 'magic';
         let rawAttack = Number(isMagic ? player.stats?.magicAttack : player.stats?.physicalAttack) || 1;
-        const critChance = Math.max(0, Math.min(0.9, Number(player.stats?.criticalChance || 0)));
+        rawAttack *= Math.max(0.2, Number(fx.attackMul || 1));
+        const critChance = Math.max(0, Math.min(0.95, Number(player.stats?.criticalChance || 0) + Number(fx.critAdd || 0)));
         if (Math.random() < critChance) rawAttack *= 1.5;
+        const targetFx = this.getActiveSkillEffectAggregate(target, now);
         let targetDefense = Number(isMagic ? target.stats?.magicDefense : target.stats?.physicalDefense) || 0;
+        targetDefense *= isMagic
+            ? Math.max(0.1, Number(targetFx.magicDefenseMul || 1))
+            : Math.max(0.1, Number(targetFx.defenseMul || 1));
         if (this.shouldLuckyStrike(player, target)) targetDefense *= 0.5;
-        const damage = this.computeDamageAfterMitigation(rawAttack, targetDefense, Number(target.level || 1));
+        let damage = this.computeDamageAfterMitigation(rawAttack, targetDefense, Number(target.level || 1));
+        damage = Math.max(1, Math.floor(damage * (1 - Math.max(0, Math.min(0.95, Number(targetFx.damageReduction || 0))))));
+        const attackerHpBefore = Number(player.hp || 0);
 
         target.hp = Math.max(0, target.hp - damage);
         if (target.hp <= 0) {
@@ -2273,6 +2849,24 @@ export class GameController {
         }
         player.lastCombatAt = now;
         target.lastCombatAt = now;
+        this.applyOnHitSkillEffects(player, damage, now);
+
+        const reflect = Math.max(0, Math.min(0.5, Number(targetFx.reflect || 0)));
+        if (reflect > 0 && player.hp > 0) {
+            const reflected = Math.max(1, Math.floor(damage * reflect));
+            player.hp = Math.max(0, Number(player.hp || 0) - reflected);
+            if (player.hp <= 0) {
+                player.dead = true;
+                player.deathX = player.x;
+                player.deathY = player.y;
+                player.autoAttackActive = false;
+                player.attackTargetId = null;
+                player.pvpAutoAttackActive = false;
+                player.attackTargetPlayerId = null;
+                this.sendRaw(player.ws, { type: 'player.dead' });
+            }
+        }
+        if (Number(player.hp || 0) !== attackerHpBefore) this.sendStatsUpdated(player);
 
         this.persistPlayer(target);
         this.syncAllPartyStates();
@@ -2798,6 +3392,23 @@ export class GameController {
             stackable: true,
             maxStack: 64,
             healPercent: Number(HP_POTION_TEMPLATE.healPercent || 0.5),
+            x,
+            y,
+            mapId,
+            expiresAt: Date.now() + GROUND_ITEM_TTL_MS
+        } as any);
+    }
+
+    private dropSkillResetHourglassAt(x: number, y: number, mapId: string) {
+        this.groundItems.push({
+            id: randomUUID(),
+            type: SKILL_RESET_HOURGLASS_TEMPLATE.type,
+            name: SKILL_RESET_HOURGLASS_TEMPLATE.name,
+            slot: SKILL_RESET_HOURGLASS_TEMPLATE.slot,
+            bonuses: {},
+            quantity: 1,
+            stackable: Boolean(SKILL_RESET_HOURGLASS_TEMPLATE.stackable),
+            maxStack: Number(SKILL_RESET_HOURGLASS_TEMPLATE.maxStack || 64),
             x,
             y,
             mapId,
@@ -3332,6 +3943,8 @@ export class GameController {
     }
 
     private persistPlayer(player: PlayerRuntime) {
+        if (!player.statusOverrides || typeof player.statusOverrides !== 'object') player.statusOverrides = {};
+        player.statusOverrides.__skillLevels = this.normalizeSkillLevels(player.skillLevels || {});
         void this.persistence.savePlayer(player).catch((error) => {
             logEvent('ERROR', 'save_player_error', { playerId: player.id, error: String(error) });
         });
@@ -3352,11 +3965,56 @@ export class GameController {
         };
     }
 
+    private normalizeSkillLevels(input: any): Record<string, number> {
+        const src = input && typeof input === 'object' ? input : {};
+        const out: Record<string, number> = {};
+        for (const [skillId, raw] of Object.entries(src)) {
+            if (!SKILL_DEFS[String(skillId)]) continue;
+            const lvl = Math.max(0, Math.min(5, Math.floor(Number(raw || 0))));
+            if (lvl > 0) out[String(skillId)] = lvl;
+        }
+        return out;
+    }
+
+    private getSpentSkillPoints(player: PlayerRuntime) {
+        const levels = this.normalizeSkillLevels(player.skillLevels || {});
+        return Object.values(levels).reduce((sum, lvl) => sum + Math.max(0, Number(lvl || 0)), 0);
+    }
+
+    private getAvailableSkillPoints(player: PlayerRuntime) {
+        const level = Math.max(1, Math.floor(Number(player.level || 1)));
+        const earned = Math.max(0, level - 1);
+        const spent = this.getSpentSkillPoints(player);
+        return Math.max(0, earned - spent);
+    }
+
+    private getSkillLevel(player: PlayerRuntime, skillId: string) {
+        const levels = this.normalizeSkillLevels(player.skillLevels || {});
+        return Math.max(0, Math.min(5, Number(levels[skillId] || 0)));
+    }
+
+    private getSkillPrerequisite(skillId: string) {
+        for (const chain of Object.values(SKILL_CHAINS)) {
+            const idx = chain.indexOf(skillId);
+            if (idx <= 0) continue;
+            return chain[idx - 1];
+        }
+        return null;
+    }
+
+    private getSkillPowerWithLevel(skill: SkillDef, level: number) {
+        const safeLevel = Math.max(1, Math.min(5, Number(level || 1)));
+        const base = Number(skill.power || 1);
+        return base * (1 + (safeLevel - 1) * 0.22);
+    }
+
     private sendStatsUpdated(player: PlayerRuntime) {
         this.sendRaw(player.ws, {
             type: 'player.statsUpdated',
             stats: player.stats,
             allocatedStats: this.normalizeAllocatedStats(player.allocatedStats),
+            skillLevels: this.normalizeSkillLevels(player.skillLevels || {}),
+            skillPointsAvailable: this.getAvailableSkillPoints(player),
             unspentPoints: Number.isInteger(player.unspentPoints) ? player.unspentPoints : 0,
             level: player.level,
             xp: player.xp,

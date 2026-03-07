@@ -4,21 +4,21 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model User {
-  id            Int      @id @default(autoincrement())
+  id            String   @id @default(cuid())
   username      String   @unique
   passwordHash  String
   salt          String
   createdAt     DateTime @default(now())
-  player        Player?
+  players       Player[]
 }
 
 model Player {
   id                Int      @id @default(autoincrement())
-  userId            Int      @unique
+  userId            String
+  slot              Int      @default(0)
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name              String
   class             String
@@ -46,6 +46,8 @@ model Player {
   receivedFriendRequests FriendRequest[] @relation("FriendRequestTo")
   friendshipsA           Friendship[]    @relation("FriendshipA")
   friendshipsB           Friendship[]    @relation("FriendshipB")
+
+  @@unique([userId, slot])
 }
 
 model Item {

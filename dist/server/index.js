@@ -15,6 +15,7 @@ const logger_1 = require("./utils/logger");
 const config_1 = require("./config");
 const prisma_1 = __importDefault(require("./utils/prisma"));
 const app = (0, express_1.default)();
+const PORT = Number(process.env.PORT || 3000);
 app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
     res.type('application/json').send('{}');
 });
@@ -28,17 +29,12 @@ async function initializeServer() {
         const mobService = new MobService_1.MobService();
         const gameController = new GameController_1.GameController(persistence, mobService);
         const wsHandler = new WSHandler_1.WSHandler(gameController);
+        const mobTemplates = await persistence.getMobTemplates();
+        mobService.loadTemplateCache(mobTemplates);
         for (const mapKey of config_1.MAP_KEYS) {
             for (const mapId of config_1.MAP_IDS) {
                 const mapInstanceId = (0, config_1.composeMapInstanceId)(mapKey, mapId);
-                for (let i = 0; i < 25; i++)
-                    mobService.spawnMob('normal', mapInstanceId);
-                for (let i = 0; i < 15; i++)
-                    mobService.spawnMob('elite', mapInstanceId);
-                for (let i = 0; i < 5; i++)
-                    mobService.spawnMob('subboss', mapInstanceId);
-                for (let i = 0; i < 1; i++)
-                    mobService.spawnMob('boss', mapInstanceId);
+                mobService.seedMapInstance(mapInstanceId);
             }
         }
         wss.on('connection', (ws) => {
@@ -82,9 +78,9 @@ async function initializeServer() {
                 client.send(JSON.stringify(gameController.buildWorldSnapshot(player.mapId, player.mapKey)));
             }
         }, config_1.TICK_MS);
-        server.listen(3000, () => {
-            (0, logger_1.logEvent)('INFO', 'server_started', { port: 3000 });
-            console.log('Server running on http://localhost:3000');
+        server.listen(PORT, () => {
+            (0, logger_1.logEvent)('INFO', 'server_started', { port: PORT });
+            console.log(`Server running on http://localhost:${PORT}`);
         });
     }
     catch (error) {

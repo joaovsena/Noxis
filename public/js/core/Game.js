@@ -33,6 +33,10 @@ export class Game {
         this.mapPortals = [];
         this.baseRenderWidth = window.innerWidth || 1366;
         this.baseRenderHeight = window.innerHeight || 768;
+        this.baseDevicePixelRatio = Number(window.devicePixelRatio || 1) || 1;
+        this.minGameZoomScale = 0.67;
+        this.maxGameZoomScale = 1.5;
+        this.currentGameZoomScale = 1;
 
         this.panel = document.getElementById('char-panel');
         this.panelBody = document.getElementById('panel-body');
@@ -65,6 +69,14 @@ export class Game {
         this.autoAttackToggle = document.getElementById('auto-attack-toggle');
         this.pathDebugSetting = document.getElementById('path-debug-setting');
         this.pathDebugToggle = document.getElementById('path-debug-toggle');
+        this.hudDebugSetting = document.getElementById('hud-debug-setting');
+        this.hudDebugToggle = document.getElementById('hud-debug-toggle');
+        this.hudDebugPanel = document.getElementById('hud-debug-panel');
+        this.hudScaleMinInput = document.getElementById('hud-scale-min');
+        this.hudScaleMaxInput = document.getElementById('hud-scale-max');
+        this.hudScaleMinValue = document.getElementById('hud-scale-min-value');
+        this.hudScaleMaxValue = document.getElementById('hud-scale-max-value');
+        this.hudDebugResetBtn = document.getElementById('hud-debug-reset');
         this.mobPeacefulSetting = document.getElementById('mob-peaceful-setting');
         this.mobPeacefulToggle = document.getElementById('mob-peaceful-toggle');
         this.pathDebugEnabled = false;
@@ -121,6 +133,9 @@ export class Game {
         this.chatScopeButtons = [...document.querySelectorAll('.chat-scope')];
         this.chatScope = 'local';
         this.chatToggle = document.getElementById('chat-toggle');
+        this.chatModeMenu = document.getElementById('chat-mode-menu');
+        this.chatModeOptions = [...document.querySelectorAll('.chat-mode-option')];
+        this.chatLayoutOverrideMode = null;
         this.lastMoveAck = null;
         this.lastMoveSent = null;
         this.moveReqCounter = 0;
@@ -128,6 +143,7 @@ export class Game {
         this.localPlannedPath = [];
         this.chatBubbles = {};
         this.combatProjectiles = [];
+        this.skillEffects = [];
 
         this.skillbarWrap = document.getElementById('skillbar-wrap');
         this.skillButtons = [...document.querySelectorAll('.skill-slot-btn')];
@@ -139,8 +155,7 @@ export class Game {
             this.hotbarBindings[key] = null;
         });
         this.hotbarBindings['1'] = { type: 'action', actionId: 'basic_attack' };
-        this.hotbarStorageKey = 'noxis.hotbarBindings.v1';
-        this.loadHotbarBindingsFromStorage();
+        this.resetHotbarBindingsToDefault();
         this.menuAttrs = document.getElementById('menu-attrs');
         this.menuInventory = document.getElementById('menu-inventory');
         this.menuSkills = document.getElementById('menu-skills');
@@ -207,9 +222,8 @@ export class Game {
             vit: 0
         };
         this.skillStateStorageKey = 'noxis.skillTree.v1';
-        this.skillTreeTab = 'holy';
+        this.skillTreeTab = 'buildA';
         this.skillTreeNodes = this.buildSkillTreeNodes();
-        this.skillTreeState = {};
         this.selectedAutoAttackSkillId = 'class_primary';
         this.modularSkillIds = [];
         this.loadSkillStateFromStorage();
@@ -292,7 +306,7 @@ export class Game {
         const handleWorldClick = (clientX, clientY) => {
             if (this.isDead) return;
             const world = this.toWorldCoordsFromClient(clientX, clientY);
-            const itemId = this.getGroundItemAt(world.x, world.y);
+            const itemId = this.getGroundItemAt(world.x, world.y) || this.getNearestGroundItemAt(world.x, world.y, 32);
             if (itemId) {
                 this.tryPickupGroundItem(itemId);
                 return;
@@ -431,6 +445,14 @@ export class Game {
         window.addEventListener('keydown', (e) => {
             if (!this.localId) return;
             if (isTypingInField()) return;
+            if (e.code !== 'Space') return;
+            e.preventDefault();
+            this.tryPickupNearestGroundItem();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (!this.localId) return;
+            if (isTypingInField()) return;
             const key = String(e.key || '').toLowerCase();
             const btn = this.skillButtonByKey.get(key);
             if (!btn) return;
@@ -564,9 +586,20 @@ export class Game {
                 const key = String(btn.dataset.key || '').toLowerCase();
                 if (!key) return;
                 const binding = this.hotbarBindings[key];
+                if (binding?.type === 'action' && binding.actionId === 'skill_cast' && binding.skillId) {
+                    const node = this.getSkillNodeById(String(binding.skillId));
+                    if (node) {
+                        const level = this.getSkillNodeLevel(node.id);
+                        this.openSkillTooltip(node, level, e.clientX, e.clientY, 'hotbar_skill_hover');
+                        return;
+                    }
+                }
                 const item = this.findHotbarBindingItem(binding);
                 if (!item) return;
-                this.openItemTooltip(item, e.clientX, e.clientY, 'hotbar_hover');
+                this.openItemTooltip(item, e.clientX, e.clientY, 'hotbar_hover', {
+                    placement: 'top-right',
+                    anchorElement: btn
+                });
             });
             btn.addEventListener('mouseleave', () => {
                 this.scheduleTooltipClose();
@@ -574,23 +607,28 @@ export class Game {
         });
         if (this.skillsTabHoly) {
             this.skillsTabHoly.addEventListener('click', () => {
-                this.skillTreeTab = 'holy';
+                this.skillTreeTab = 'buildA';
                 this.renderSkillsPanel();
             });
         }
         if (this.skillsTabBlood) {
             this.skillsTabBlood.addEventListener('click', () => {
-                this.skillTreeTab = 'blood';
+                this.skillTreeTab = 'buildB';
                 this.renderSkillsPanel();
             });
         }
         if (this.skillsTreeWrap) {
-            this.skillsTreeWrap.addEventListener('click', (e) => {
-                const nodeEl = e.target && typeof e.target.closest === 'function'
-                    ? e.target.closest('.skills-node')
+            this.skillsTreeWrap.addEventListener('pointerdown', (e) => {
+                const targetEl = e.target && e.target.nodeType === 3
+                    ? e.target.parentElement
+                    : e.target;
+                const learnBtn = targetEl && typeof targetEl.closest === 'function'
+                    ? targetEl.closest('.skills-learn-btn')
                     : null;
-                if (!nodeEl) return;
-                const nodeId = String(nodeEl.dataset.nodeId || '');
+                if (!learnBtn) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const nodeId = String(learnBtn.dataset.nodeId || '');
                 if (!nodeId) return;
                 this.tryLearnSkillNode(nodeId);
             });
@@ -635,6 +673,37 @@ export class Game {
                 this.pathDebugEnabled = Boolean(this.pathDebugToggle.checked);
             });
         }
+        if (this.hudDebugToggle) {
+            this.hudDebugToggle.addEventListener('change', () => {
+                if (this.playerRole !== 'adm') {
+                    this.hudDebugToggle.checked = false;
+                    return;
+                }
+                this.updateHudDebugPanelUI();
+                this.updateHudLayout();
+            });
+        }
+        if (this.hudScaleMinInput) {
+            this.hudScaleMinInput.addEventListener('input', () => {
+                this.updateHudDebugPanelUI();
+                this.updateHudLayout();
+            });
+        }
+        if (this.hudScaleMaxInput) {
+            this.hudScaleMaxInput.addEventListener('input', () => {
+                this.updateHudDebugPanelUI();
+                this.updateHudLayout();
+            });
+        }
+        if (this.hudDebugResetBtn) {
+            this.hudDebugResetBtn.addEventListener('click', () => {
+                if (this.hudScaleMinInput) this.hudScaleMinInput.value = '84';
+                if (this.hudScaleMaxInput) this.hudScaleMaxInput.value = '106';
+                if (this.hudDebugToggle) this.hudDebugToggle.checked = false;
+                this.updateHudDebugPanelUI();
+                this.updateHudLayout();
+            });
+        }
         if (this.mobPeacefulToggle) {
             this.mobPeacefulToggle.addEventListener('change', () => {
                 if (this.playerRole !== 'adm') {
@@ -651,9 +720,26 @@ export class Game {
             this.network.send({ type: 'player.revive' });
         });
 
-        this.chatToggle.addEventListener('click', () => {
-            const minimized = this.chatWrap.classList.toggle('minimized');
-            this.chatToggle.textContent = minimized ? 'Mostrar' : 'Ocultar';
+        this.chatToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (this.chatModeMenu) this.chatModeMenu.classList.toggle('hidden');
+        });
+        this.chatModeOptions.forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const mode = String(btn.dataset.mode || 'expanded');
+                this.chatLayoutOverrideMode = mode === 'compact' || mode === 'mini' ? mode : 'expanded';
+                if (this.chatModeMenu) this.chatModeMenu.classList.add('hidden');
+                this.updateHudLayout();
+            });
+        });
+        window.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!this.chatModeMenu || this.chatModeMenu.classList.contains('hidden')) return;
+            const insideChat = target && typeof target.closest === 'function' && target.closest('#chat-wrap');
+            if (!insideChat) this.chatModeMenu.classList.add('hidden');
         });
 
         this.deleteConfirmYes.addEventListener('click', () => {
@@ -757,7 +843,7 @@ export class Game {
 
         this.makeDraggable(this.panel, this.charPanelHeader);
         this.makeDraggable(this.inventoryPanel, this.inventoryHeader);
-        this.makeDraggable(this.skillsPanel, this.skillsHeader);
+        this.makeDraggable(this.skillsPanel, this.skillsHeader, true);
         this.makeDraggable(this.adminPanel, this.adminHeader);
         this.makeDraggable(this.partyPanel, this.partyHeader);
         this.makeDraggable(this.friendsPanel, this.friendsHeader);
@@ -895,6 +981,16 @@ export class Game {
         if (this.menu) this.menu.setStatus('Logando...');
     }
 
+    sendCharacterCreate(payload) {
+        this.network.send({ type: 'character_create', ...payload });
+        if (this.menu) this.menu.setStatus('Criando personagem...');
+    }
+
+    sendCharacterEnter(slot) {
+        this.network.send({ type: 'character_enter', slot: Number(slot) });
+        if (this.menu) this.menu.setStatus('Entrando no mundo...');
+    }
+
     /**
      * Exibe mensagens de autenticação na UI.
      */
@@ -902,10 +998,21 @@ export class Game {
         if (this.menu) this.menu.setStatus(message.message, message.type === 'auth_error');
     }
 
+    onCharacterRequired(message) {
+        if (!this.menu) return;
+        this.menu.showCharacterRequired(message.message || 'Crie seu personagem para continuar.');
+    }
+
+    onCharacterSelect(message) {
+        if (!this.menu) return;
+        this.menu.showCharacterSelect(message);
+    }
+
     /**
      * Finaliza login no cliente e habilita HUD/jogo.
      */
     onAuthSuccess(message) {
+        this.resetSessionUiState();
         this.localId = message.playerId;
         this.resetPendingStatAllocation();
         this.isDead = false;
@@ -943,6 +1050,7 @@ export class Game {
         this.renderPartyPanel();
         this.renderPartyFrames();
         this.renderPartyNotifications();
+        this.applyHotbarBindings(message.hotbarBindings);
         this.renderHotbar();
         this.renderSkillsPanel();
     }
@@ -984,6 +1092,8 @@ export class Game {
         this.isDead = false;
         this.pendingPickup = null;
         this.hoveredGroundItemId = null;
+        this.skillEffects = [];
+        this.resetHotbarBindingsToDefault();
         this.updateGroundItemCursor();
         this.reviveOverlay.classList.add('hidden');
         this.clearPlayerTarget();
@@ -992,7 +1102,39 @@ export class Game {
         this.renderPartyNotifications();
         this.renderFriendsPanel();
         this.renderFriendNotifications();
-        if (this.menu) this.menu.setStatus('Conexao encerrada.', true);
+        this.localId = null;
+        this.canvas.style.display = 'none';
+        this.playerCard.classList.add('hidden');
+        this.minimapWrap.classList.add('hidden');
+        this.chatWrap.classList.add('hidden');
+        this.skillbarWrap.classList.add('hidden');
+        this.menusWrap.classList.add('hidden');
+        if (this.menu) {
+            this.menu.showLogin();
+            this.menu.setStatus('Conexao encerrada.', true);
+        }
+    }
+
+    resetSessionUiState() {
+        this.players = {};
+        this.mobs = {};
+        this.groundItems = {};
+        this.inventory = [];
+        this.equippedWeaponId = null;
+        this.selectedMobId = null;
+        this.selectedPlayerId = null;
+        this.pendingPickup = null;
+        this.hoveredGroundItemId = null;
+        this.skillEffects = [];
+        this.closeAllTooltips('session_reset');
+        this.resetHotbarBindingsToDefault();
+        try {
+            if (window?.localStorage) {
+                window.localStorage.removeItem('noxis.hotbarBindings.v1');
+            }
+        } catch {
+            // noop
+        }
     }
 
     /**
@@ -1018,6 +1160,12 @@ export class Game {
         this.renderSkillsPanel();
         this.renderInventory();
         this.updatePanel();
+    }
+
+    onHotbarState(message) {
+        if (!this.localId) return;
+        this.applyHotbarBindings(message?.bindings);
+        this.renderHotbar();
     }
 
     syncLocalEquippedWeaponName() {
@@ -1134,6 +1282,20 @@ export class Game {
         });
     }
 
+    onSkillEffect(message) {
+        const now = Date.now();
+        const x = Number(message?.x);
+        const y = Number(message?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        this.skillEffects.push({
+            x,
+            y,
+            effectKey: String(message?.effectKey || 'skill'),
+            startedAt: now,
+            expiresAt: now + 700
+        });
+    }
+
     onPartyInviteReceived(message) {
         const inviteId = String(message.inviteId || `${message.partyId}:${message.fromPlayerId}`);
         const already = this.pendingPartyInvites.some((it) => it.inviteId === inviteId);
@@ -1211,6 +1373,8 @@ export class Game {
         const me = this.players[this.localId];
         me.stats = message.stats || me.stats;
         me.allocatedStats = this.normalizeAllocatedStats(message.allocatedStats);
+        me.skillLevels = message.skillLevels && typeof message.skillLevels === 'object' ? message.skillLevels : (me.skillLevels || {});
+        me.skillPointsAvailable = Number.isFinite(Number(message.skillPointsAvailable)) ? Math.max(0, Number(message.skillPointsAvailable)) : Number(me.skillPointsAvailable || 0);
         me.unspentPoints = Number.isFinite(Number(message.unspentPoints)) ? Math.max(0, Number(message.unspentPoints)) : 0;
         me.level = Number.isFinite(Number(message.level)) ? Number(message.level) : me.level;
         me.xp = Number.isFinite(Number(message.xp)) ? Number(message.xp) : me.xp;
@@ -1427,6 +1591,23 @@ export class Game {
         return null;
     }
 
+    getNearestGroundItemAt(x, y, maxDistance = 32) {
+        let nearestId = null;
+        let nearestDistSq = maxDistance * maxDistance;
+        for (const id of Object.keys(this.groundItems)) {
+            const it = this.groundItems[id];
+            if (!it) continue;
+            const dx = Number(x) - Number(it.x);
+            const dy = Number(y) - Number(it.y);
+            const d2 = dx * dx + dy * dy;
+            if (d2 <= nearestDistSq) {
+                nearestDistSq = d2;
+                nearestId = id;
+            }
+        }
+        return nearestId;
+    }
+
     updateGroundItemCursor() {
         if (!this.canvas) return;
         this.canvas.style.cursor = this.hoveredGroundItemId ? 'grab' : 'default';
@@ -1441,50 +1622,85 @@ export class Game {
         if (!this.localId || !this.players[this.localId]) return;
         const item = this.groundItems[itemId];
         if (!item) return;
-        const me = this.players[this.localId];
-        const inRange = Math.hypot(Number(item.x) - Number(me.x), Number(item.y) - Number(me.y)) <= this.pickupInteractRange;
-        if (inRange) {
-            this.network.send({ type: 'pickup_item', itemId });
-            this.pendingPickup = null;
-            return;
-        }
-
+        const now = Date.now();
         this.pendingPickup = {
             itemId: String(itemId),
             targetX: Number(item.x),
             targetY: Number(item.y),
             lastTryAt: 0,
-            createdAt: Date.now()
+            lastMoveAt: 0,
+            createdAt: now
         };
+        const me = this.players[this.localId];
+        const inRange = Math.hypot(Number(item.x) - Number(me.x), Number(item.y) - Number(me.y)) <= this.pickupInteractRange;
+        if (inRange) {
+            this.pendingPickup.lastTryAt = now;
+            this.network.send({ type: 'pickup_item', itemId: String(itemId) });
+            return;
+        }
         const reqId = `m-${++this.moveReqCounter}-${Date.now()}`;
         this.network.send({ type: 'move', reqId, x: Number(item.x), y: Number(item.y) });
         this.lastMoveSent = { reqId, x: Number(item.x), y: Number(item.y), at: Date.now() };
+        this.pendingPickup.lastMoveAt = now;
     }
 
-    updatePendingPickup() {
+    processPendingPickup() {
         if (!this.pendingPickup) return;
-        if (!this.localId || !this.players[this.localId]) {
+        if (!this.localId || !this.players[this.localId]) return;
+        const me = this.players[this.localId];
+        const pendingItem = this.groundItems[this.pendingPickup.itemId];
+        if (!pendingItem) {
             this.pendingPickup = null;
             return;
         }
 
         const now = Date.now();
-        if (now - Number(this.pendingPickup.createdAt || now) > 8000) {
+        if (now - Number(this.pendingPickup.createdAt || 0) > 10000) {
             this.pendingPickup = null;
             return;
         }
 
-        const item = this.groundItems[this.pendingPickup.itemId];
-        if (!item) {
-            this.pendingPickup = null;
+        const dist = Math.hypot(Number(pendingItem.x) - Number(me.x), Number(pendingItem.y) - Number(me.y));
+        if (dist <= this.pickupInteractRange) {
+            if (now - Number(this.pendingPickup.lastTryAt || 0) < 180) return;
+            this.pendingPickup.lastTryAt = now;
+            this.network.send({ type: 'pickup_item', itemId: this.pendingPickup.itemId });
             return;
         }
+
+        if (now - Number(this.pendingPickup.lastMoveAt || 0) < 350) return;
+        const reqId = `m-${++this.moveReqCounter}-${now}`;
+        this.network.send({ type: 'move', reqId, x: Number(pendingItem.x), y: Number(pendingItem.y) });
+        this.lastMoveSent = { reqId, x: Number(pendingItem.x), y: Number(pendingItem.y), at: now };
+        this.pendingPickup.lastMoveAt = now;
+    }
+
+    tryPickupNearestGroundItem() {
+        if (!this.localId || !this.players[this.localId]) return;
         const me = this.players[this.localId];
-        const dist = Math.hypot(Number(item.x) - Number(me.x), Number(item.y) - Number(me.y));
-        if (dist > this.pickupInteractRange) return;
-        if (now - Number(this.pendingPickup.lastTryAt || 0) < 150) return;
-        this.pendingPickup.lastTryAt = now;
-        this.network.send({ type: 'pickup_item', itemId: this.pendingPickup.itemId });
+
+        if (this.pendingPickup) {
+            const pendingItem = this.groundItems[this.pendingPickup.itemId];
+            if (pendingItem) {
+                const pendingDist = Math.hypot(Number(pendingItem.x) - Number(me.x), Number(pendingItem.y) - Number(me.y));
+                if (pendingDist <= this.pickupInteractRange) {
+                    this.network.send({ type: 'pickup_item', itemId: this.pendingPickup.itemId });
+                    return;
+                }
+            }
+        }
+
+        const nearby = [];
+        for (const id of Object.keys(this.groundItems)) {
+            const item = this.groundItems[id];
+            if (!item) continue;
+            const dist = Math.hypot(Number(item.x) - Number(me.x), Number(item.y) - Number(me.y));
+            if (dist <= this.pickupInteractRange) nearby.push(id);
+        }
+        if (!nearby.length) return;
+        const randomIndex = Math.floor(Math.random() * nearby.length);
+        const itemId = nearby[randomIndex];
+        this.network.send({ type: 'pickup_item', itemId });
     }
 
     /**
@@ -1594,6 +1810,8 @@ export class Game {
         for (const [playerId, target] of Object.entries(this.players)) {
             if (playerId === String(this.localId)) continue;
             if (!target || target.dead || Number(target.hp || 0) <= 0) continue;
+            const allowed = this.canStartPvpAgainstTarget(me, target, true);
+            if (!allowed.ok) continue;
             const dx = Number(target.x) - Number(me.x);
             const dy = Number(target.y) - Number(me.y);
             const d2 = dx * dx + dy * dy;
@@ -1618,17 +1836,141 @@ export class Game {
     }
 
     buildSkillTreeNodes() {
-        return [
-            { id: 'holy_strike_1', tab: 'holy', label: 'Golpe Sagrado I', x: 14, y: 8, prereq: null, maxPoints: 1, autoEligible: true },
-            { id: 'holy_strike_2', tab: 'holy', label: 'Golpe Sagrado II', x: 14, y: 28, prereq: 'holy_strike_1', maxPoints: 1, autoEligible: true },
-            { id: 'holy_strike_3', tab: 'holy', label: 'Golpe Sagrado III', x: 14, y: 48, prereq: 'holy_strike_2', maxPoints: 1, autoEligible: true },
-            { id: 'holy_burst_1', tab: 'holy', label: 'Lamina Santa I', x: 46, y: 8, prereq: null, maxPoints: 1, autoEligible: true },
-            { id: 'holy_burst_2', tab: 'holy', label: 'Lamina Santa II', x: 46, y: 28, prereq: 'holy_burst_1', maxPoints: 1, autoEligible: true },
-            { id: 'holy_burst_3', tab: 'holy', label: 'Lamina Santa III', x: 46, y: 48, prereq: 'holy_burst_2', maxPoints: 1, autoEligible: true },
-            { id: 'blood_cut_1', tab: 'blood', label: 'Corte Sombrio I', x: 30, y: 8, prereq: null, maxPoints: 1, autoEligible: true },
-            { id: 'blood_cut_2', tab: 'blood', label: 'Corte Sombrio II', x: 30, y: 28, prereq: 'blood_cut_1', maxPoints: 1, autoEligible: true },
-            { id: 'blood_cut_3', tab: 'blood', label: 'Corte Sombrio III', x: 30, y: 48, prereq: 'blood_cut_2', maxPoints: 1, autoEligible: true }
-        ];
+        const byClass = {
+            knight: {
+                buildA: {
+                    label: 'Bastiao',
+                    skills: [
+                        ['war_bastion_escudo_fe', 'Escudo da Fe'],
+                        ['war_bastion_muralha', 'Muralha'],
+                        ['war_bastion_renovacao', 'Renovacao'],
+                        ['war_bastion_inabalavel', 'Inabalavel'],
+                        ['war_bastion_impacto_sismico', 'Impacto Sismico']
+                    ]
+                },
+                buildB: {
+                    label: 'Carrasco',
+                    skills: [
+                        ['war_carrasco_frenesi', 'Frenesi'],
+                        ['war_carrasco_lacerar', 'Lacerar'],
+                        ['war_carrasco_ira', 'Ira'],
+                        ['war_carrasco_golpe_sacrificio', 'Golpe Sacrificio'],
+                        ['war_carrasco_aniquilacao', 'Aniquilacao']
+                    ]
+                }
+            },
+            archer: {
+                buildA: {
+                    label: 'Patrulheiro',
+                    skills: [
+                        ['arc_patrulheiro_tiro_ofuscante', 'Tiro Ofuscante'],
+                        ['arc_patrulheiro_foco_distante', 'Foco Distante'],
+                        ['arc_patrulheiro_abrolhos', 'Abrolhos'],
+                        ['arc_patrulheiro_salva_flechas', 'Salva de Flechas'],
+                        ['arc_patrulheiro_passo_vento', 'Passo de Vento']
+                    ]
+                },
+                buildB: {
+                    label: 'Franco',
+                    skills: [
+                        ['arc_franco_flecha_debilitante', 'Flecha Debilitante'],
+                        ['arc_franco_ponteira_envenenada', 'Ponteira Envenenada'],
+                        ['arc_franco_olho_aguia', 'Olho de Aguia'],
+                        ['arc_franco_disparo_perfurante', 'Disparo Perfurante'],
+                        ['arc_franco_tiro_misericordia', 'Tiro Misericordia']
+                    ]
+                }
+            },
+            druid: {
+                buildA: {
+                    label: 'Preservador',
+                    skills: [
+                        ['dru_preservador_florescer', 'Florescer'],
+                        ['dru_preservador_casca_ferro', 'Casca de Ferro'],
+                        ['dru_preservador_emaranhado', 'Emaranhado'],
+                        ['dru_preservador_prece_natureza', 'Prece Natureza'],
+                        ['dru_preservador_avatar_espiritual', 'Avatar Espiritual']
+                    ]
+                },
+                buildB: {
+                    label: 'Primal',
+                    skills: [
+                        ['dru_primal_espinhos', 'Espinhos'],
+                        ['dru_primal_enxame', 'Enxame'],
+                        ['dru_primal_patada_sombria', 'Patada Sombria'],
+                        ['dru_primal_nevoa_obscura', 'Nevoa Obscura'],
+                        ['dru_primal_invocacao_primal', 'Invocacao Primal']
+                    ]
+                }
+            },
+            assassin: {
+                buildA: {
+                    label: 'Agil',
+                    skills: [
+                        ['ass_agil_reflexos', 'Reflexos'],
+                        ['ass_agil_contra_ataque', 'Contra-Ataque'],
+                        ['ass_agil_passo_fantasma', 'Passo Fantasma'],
+                        ['ass_agil_golpe_nervos', 'Golpe de Nervos'],
+                        ['ass_agil_miragem', 'Miragem']
+                    ]
+                },
+                buildB: {
+                    label: 'Letal',
+                    skills: [
+                        ['ass_letal_expor_fraqueza', 'Expor Fraqueza'],
+                        ['ass_letal_ocultar', 'Ocultar'],
+                        ['ass_letal_emboscada', 'Emboscada'],
+                        ['ass_letal_bomba_fumaca', 'Bomba de Fumaca'],
+                        ['ass_letal_sentenca', 'Sentenca']
+                    ]
+                }
+            }
+        };
+
+        const out = [];
+        for (const [classId, classDef] of Object.entries(byClass)) {
+            const leftX = 14;
+            const rightX = 48;
+            const yStart = 8;
+            const yStep = 18;
+            classDef.buildA.skills.forEach((row, idx) => {
+                out.push({
+                    id: row[0],
+                    classId,
+                    buildKey: 'buildA',
+                    buildLabel: classDef.buildA.label,
+                    label: row[1],
+                    x: leftX,
+                    y: yStart + idx * yStep,
+                    prereq: idx > 0 ? classDef.buildA.skills[idx - 1][0] : null,
+                    maxPoints: 5,
+                    autoEligible: true
+                });
+            });
+            classDef.buildB.skills.forEach((row, idx) => {
+                out.push({
+                    id: row[0],
+                    classId,
+                    buildKey: 'buildB',
+                    buildLabel: classDef.buildB.label,
+                    label: row[1],
+                    x: rightX,
+                    y: yStart + idx * yStep,
+                    prereq: idx > 0 ? classDef.buildB.skills[idx - 1][0] : null,
+                    maxPoints: 5,
+                    autoEligible: true
+                });
+            });
+        }
+        return out;
+    }
+
+    getCurrentSkillClassId() {
+        if (!this.localId || !this.players[this.localId]) return 'knight';
+        const raw = String(this.players[this.localId].class || 'knight');
+        if (raw === 'bandit') return 'assassin';
+        if (raw === 'shifter') return 'druid';
+        return raw;
     }
 
     loadSkillStateFromStorage() {
@@ -1638,14 +1980,6 @@ export class Game {
             if (!raw) return;
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return;
-            const validIds = new Set(this.skillTreeNodes.map((n) => n.id));
-            const incomingTree = parsed.tree && typeof parsed.tree === 'object' ? parsed.tree : {};
-            this.skillTreeState = {};
-            for (const [id, points] of Object.entries(incomingTree)) {
-                if (!validIds.has(id)) continue;
-                const value = Math.max(0, Math.floor(Number(points || 0)));
-                if (value > 0) this.skillTreeState[id] = Math.min(value, 1);
-            }
             this.selectedAutoAttackSkillId = typeof parsed.autoAttackSkillId === 'string' && parsed.autoAttackSkillId
                 ? parsed.autoAttackSkillId
                 : 'class_primary';
@@ -1658,7 +1992,6 @@ export class Game {
         try {
             if (!window || !window.localStorage) return;
             window.localStorage.setItem(this.skillStateStorageKey, JSON.stringify({
-                tree: this.skillTreeState,
                 autoAttackSkillId: this.selectedAutoAttackSkillId
             }));
         } catch {
@@ -1666,19 +1999,22 @@ export class Game {
         }
     }
 
-    getSkillPointsEarned() {
-        if (!this.localId || !this.players[this.localId]) return 0;
-        const level = Number(this.players[this.localId].level || 1);
-        if (!Number.isFinite(level)) return 0;
-        return Math.max(0, Math.floor(level) - 1);
-    }
-
-    getSkillPointsSpent() {
-        return Object.values(this.skillTreeState || {}).reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
+    getLocalSkillLevels() {
+        if (!this.localId || !this.players[this.localId]) return {};
+        const raw = this.players[this.localId].skillLevels;
+        if (!raw || typeof raw !== 'object') return {};
+        return raw;
     }
 
     getSkillPointsAvailable() {
-        return Math.max(0, this.getSkillPointsEarned() - this.getSkillPointsSpent());
+        if (!this.localId || !this.players[this.localId]) return 0;
+        const me = this.players[this.localId];
+        const provided = Number(me.skillPointsAvailable);
+        if (Number.isFinite(provided)) return Math.max(0, Math.floor(provided));
+        const level = Math.max(1, Math.floor(Number(me.level || 1)));
+        const levels = this.getLocalSkillLevels();
+        const spent = Object.values(levels).reduce((sum, raw) => sum + Math.max(0, Math.min(5, Math.floor(Number(raw || 0)))), 0);
+        return Math.max(0, (level - 1) - spent);
     }
 
     getSkillNodeById(nodeId) {
@@ -1686,15 +2022,24 @@ export class Game {
     }
 
     isSkillNodeLearned(nodeId) {
-        return Number(this.skillTreeState[nodeId] || 0) > 0;
+        const levels = this.getLocalSkillLevels();
+        return Number(levels[nodeId] || 0) > 0;
+    }
+
+    getSkillNodeLevel(nodeId) {
+        const levels = this.getLocalSkillLevels();
+        return Math.max(0, Math.min(5, Number(levels[nodeId] || 0)));
     }
 
     canLearnSkillNode(node) {
         if (!node) return { ok: false, reason: 'Habilidade invalida.' };
-        const current = Number(this.skillTreeState[node.id] || 0);
+        const current = this.getSkillNodeLevel(node.id);
         if (current >= Number(node.maxPoints || 1)) return { ok: false, reason: 'Nivel maximo atingido.' };
-        if (node.prereq && !this.isSkillNodeLearned(node.prereq)) return { ok: false, reason: 'Pre-requisito nao aprendido.' };
-        if (this.getSkillPointsAvailable() <= 0) return { ok: false, reason: 'Sem pontos de habilidade.' };
+        if (node.prereq) {
+            const prereqLevel = this.getSkillNodeLevel(node.prereq);
+            if (prereqLevel < 1) return { ok: false, reason: 'Aprenda o pre-requisito antes desta habilidade.' };
+        }
+        if (this.getSkillPointsAvailable() <= 0) return { ok: false, reason: 'Sem pontos de habilidade disponiveis.' };
         return { ok: true };
     }
 
@@ -1705,15 +2050,97 @@ export class Game {
             if (allowed.reason) this.onSystemMessage({ text: allowed.reason });
             return;
         }
-        this.skillTreeState[node.id] = Number(this.skillTreeState[node.id] || 0) + 1;
-        this.persistSkillStateToStorage();
-        this.renderSkillsPanel();
+        this.network.send({ type: 'skill.learn', skillId: node.id });
+    }
+
+    getSkillTooltipMeta(skillId) {
+        const catalog = {
+            war_bastion_escudo_fe: { name: 'Selo da Fe', mana: '20', cd: 'Passiva', desc: 'Impregna a armadura com energia divina.', effects: ['Aumenta PDEF/MDEF em 5%.', 'Aumenta PDEF/MDEF em 10%.', 'Aumenta PDEF/MDEF em 15%.', 'Aumenta PDEF/MDEF em 20%.', 'Aumenta PDEF/MDEF em 25%.'] },
+            war_bastion_muralha: { name: 'Muralha', mana: '45', cd: '15s', desc: 'Ergue uma barreira de luz frontal.', effects: ['Reflete 5% do dano recebido.', 'Reflete 10% do dano recebido.', 'Reflete 15% do dano recebido.', 'Reflete 20% do dano recebido.', 'Reflete 25% do dano recebido.'] },
+            war_bastion_renovacao: { name: 'Renovacao', mana: '60', cd: '30s', desc: 'Canaliza vitalidade para curar feridas.', effects: ['Recupera 2% do HP max por segundo.', 'Recupera 4% do HP max por segundo.', 'Recupera 6% do HP max por segundo.', 'Recupera 8% do HP max por segundo.', 'Recupera 10% do HP max por segundo.'] },
+            war_bastion_inabalavel: { name: 'Inabalavel', mana: '100', cd: '60s', desc: 'Torna o corpo duro como aco.', effects: ['Reduz dano em 50% por 10s.', 'Reduz dano em 60% por 10s.', 'Reduz dano em 70% por 10s.', 'Reduz dano em 80% por 10s.', 'Reduz dano em 90% por 10s.'] },
+            war_bastion_impacto_sismico: { name: 'Impacto Sismico', mana: '80', cd: '25s', desc: 'Golpeia o chao com forca tectonica.', effects: ['Atordoa inimigos em area por 1s.', 'Atordoa inimigos em area por 1.6s.', 'Atordoa inimigos em area por 2.2s.', 'Atordoa inimigos em area por 2.8s.', 'Atordoa inimigos em area por 3.5s.'] },
+            war_carrasco_frenesi: { name: 'Frenesi', mana: '15', cd: 'Passiva', desc: 'O cheiro de sangue aumenta sua regeneracao.', effects: ['Roubo de Vida: 3%.', 'Roubo de Vida: 6%.', 'Roubo de Vida: 9%.', 'Roubo de Vida: 12%.', 'Roubo de Vida: 15%.'] },
+            war_carrasco_lacerar: { name: 'Lacerar', mana: '40', cd: '8s', desc: 'Um corte que deixa feridas abertas.', effects: ['Sangramento: 10% do PATK por 5s.', 'Sangramento: 20% do PATK por 5s.', 'Sangramento: 30% do PATK por 5s.', 'Sangramento: 40% do PATK por 5s.', 'Sangramento: 50% do PATK por 5s.'] },
+            war_carrasco_ira: { name: 'Ira', mana: '50', cd: '40s', desc: 'Entra em estado de furia berserker.', effects: ['ATK +10%.', 'ATK +20%.', 'ATK +30%.', 'ATK +40%.', 'ATK +50%.'] },
+            war_carrasco_golpe_sacrificio: { name: 'Sacrificio', mana: '30', cd: '20s', desc: 'Troca vitalidade por precisao letal.', effects: ['Consome 10% HP e ganha 20% de critico.', 'Consome 10% HP e ganha 40% de critico.', 'Consome 10% HP e ganha 60% de critico.', 'Consome 10% HP e ganha 80% de critico.', 'Consome 10% HP e ganha 100% de critico.'] },
+            war_carrasco_aniquilacao: { name: 'Aniquilacao', mana: '120', cd: '50s', desc: 'Golpe devastador focado em finalizar o alvo.', effects: ['Dano fisico de 200%.', 'Dano fisico de 275%.', 'Dano fisico de 350%.', 'Dano fisico de 425%.', 'Dano fisico de 500%.'] },
+            arc_patrulheiro_tiro_ofuscante: { name: 'Tiro Ofuscante', mana: '30', cd: '12s', desc: 'Dispara uma flecha de luz que cega o oponente.', effects: ['Reduz precisao inimiga em 10%.', 'Reduz precisao inimiga em 20%.', 'Reduz precisao inimiga em 30%.', 'Reduz precisao inimiga em 40%.', 'Reduz precisao inimiga em 50%.'] },
+            arc_patrulheiro_foco_distante: { name: 'Foco Distante', mana: '10', cd: 'Passiva', desc: 'Concentracao extrema para tiros de longa distancia.', effects: ['+50 de alcance.', '+100 de alcance.', '+150 de alcance.', '+200 de alcance.', '+250 de alcance.'] },
+            arc_patrulheiro_abrolhos: { name: 'Abrolhos', mana: '40', cd: '18s', desc: 'Espalha armadilhas de espinhos no solo.', effects: ['Prende por 1s.', 'Prende por 1.8s.', 'Prende por 2.6s.', 'Prende por 3.3s.', 'Prende por 4s.'] },
+            arc_patrulheiro_salva_flechas: { name: 'Salva de Flechas', mana: '75', cd: '22s', desc: 'Chuva de flechas em uma area circular.', effects: ['Dano em area: 120%.', 'Dano em area: 165%.', 'Dano em area: 210%.', 'Dano em area: 255%.', 'Dano em area: 300%.'] },
+            arc_patrulheiro_passo_vento: { name: 'Passo de Vento', mana: '55', cd: '35s', desc: 'Invoca as correntes de ar para mover-se rapido.', effects: ['Velocidade +10%.', 'Velocidade +18%.', 'Velocidade +26%.', 'Velocidade +33%.', 'Velocidade +40%.'] },
+            arc_franco_flecha_debilitante: { name: 'Flecha Debilitante', mana: '35', cd: '10s', desc: 'Flecha banhada em toxinas que impedem a cura.', effects: ['Reduz cura recebida em 20%.', 'Reduz cura recebida em 35%.', 'Reduz cura recebida em 50%.', 'Reduz cura recebida em 65%.', 'Reduz cura recebida em 80%.'] },
+            arc_franco_ponteira_envenenada: { name: 'Ponteira Envenenada', mana: '20', cd: 'Passiva', desc: 'Seus ataques basicos aplicam veneno.', effects: ['Veneno: 5% por segundo.', 'Veneno: 10% por segundo.', 'Veneno: 15% por segundo.', 'Veneno: 20% por segundo.', 'Veneno: 25% por segundo.'] },
+            arc_franco_olho_aguia: { name: 'Olho de Aguia', mana: '45', cd: '30s', desc: 'Identifica pontos fracos na armadura inimiga.', effects: ['Critico +5%.', 'Critico +11%.', 'Critico +17%.', 'Critico +23%.', 'Critico +30%.'] },
+            arc_franco_disparo_perfurante: { name: 'Disparo Perfurante', mana: '65', cd: '15s', desc: 'Disparo potente que atravessa alvos em linha.', effects: ['Atravessa 2 alvos.', 'Atravessa 3 alvos.', 'Atravessa 4 alvos.', 'Atravessa 6 alvos.', 'Atravessa alvos ilimitados.'] },
+            arc_franco_tiro_misericordia: { name: 'Tiro de Misericordia', mana: '100', cd: '45s', desc: 'Execucao a distancia para alvos com baixo HP.', effects: ['Dano de 150%.', 'Dano de 225%.', 'Dano de 300%.', 'Dano de 375%.', 'Dano de 450%.'] },
+            dru_preservador_florescer: { name: 'Florescer', mana: '40', cd: '5s', desc: 'Faz a flora florescer instantaneamente no aliado.', effects: ['Cura 100 de HP.', 'Cura 350 de HP.', 'Cura 600 de HP.', 'Cura 900 de HP.', 'Cura 1200 de HP.'] },
+            dru_preservador_casca_ferro: { name: 'Casca de Ferro', mana: '50', cd: '20s', desc: 'Endurece a pele do aliado como tronco de carvalho.', effects: ['Defesa +10%.', 'Defesa +19%.', 'Defesa +28%.', 'Defesa +36%.', 'Defesa +45%.'] },
+            dru_preservador_emaranhado: { name: 'Emaranhado', mana: '45', cd: '15s', desc: 'Raizes emergem para impedir a fuga inimiga.', effects: ['Lentidao de 20%.', 'Lentidao de 35%.', 'Lentidao de 50%.', 'Lentidao de 70%.', 'Imobilizacao total.'] },
+            dru_preservador_prece_natureza: { name: 'Prece da Natureza', mana: '90', cd: '40s', desc: 'Uma onda de energia vital emana do Druida.', effects: ['Cura AoE de 5% do HP.', 'Cura AoE de 10% do HP.', 'Cura AoE de 15% do HP.', 'Cura AoE de 20% do HP.', 'Cura AoE de 25% do HP.'] },
+            dru_preservador_avatar_espiritual: { name: 'Avatar Espiritual', mana: '110', cd: '60s', desc: 'Sintoniza-se com o plano espiritual.', effects: ['Reduz custo de Mana em 10%.', 'Reduz custo de Mana em 20%.', 'Reduz custo de Mana em 30%.', 'Reduz custo de Mana em 40%.', 'Reduz custo de Mana em 50%.'] },
+            dru_primal_espinhos: { name: 'Espinhos', mana: '30', cd: 'Passiva', desc: 'Protege-se com espinhos magicos.', effects: ['Devolve 5% do dano magico.', 'Devolve 10% do dano magico.', 'Devolve 15% do dano magico.', 'Devolve 20% do dano magico.', 'Devolve 25% do dano magico.'] },
+            dru_primal_enxame: { name: 'Enxame', mana: '55', cd: '12s', desc: 'Insetos magicos drenam a energia do alvo.', effects: ['Drena 10 MP por segundo.', 'Drena 30 MP por segundo.', 'Drena 50 MP por segundo.', 'Drena 75 MP por segundo.', 'Drena 100 MP por segundo.'] },
+            dru_primal_patada_sombria: { name: 'Patada Sombria', mana: '40', cd: '6s', desc: 'Invoca o poder de uma fera ancestral.', effects: ['Dano magico de 130%.', 'Dano magico de 177%.', 'Dano magico de 225%.', 'Dano magico de 272%.', 'Dano magico de 320%.'] },
+            dru_primal_nevoa_obscura: { name: 'Nevoa Obscura', mana: '70', cd: '25s', desc: 'Cria um microclima de nevoa impenetravel.', effects: ['-10% de visao inimiga.', '-22% de visao inimiga.', '-35% de visao inimiga.', '-47% de visao inimiga.', '-60% de visao inimiga.'] },
+            dru_primal_invocacao_primal: { name: 'Invocacao Primal', mana: '130', cd: '90s', desc: 'Invoca um companheiro animal para lutar.', effects: ['Pet causa 20% do ATK do Druida.', 'Pet causa 35% do ATK do Druida.', 'Pet causa 50% do ATK do Druida.', 'Pet causa 65% do ATK do Druida.', 'Pet causa 80% do ATK do Druida.'] },
+            ass_agil_reflexos: { name: 'Reflexos', mana: '10', cd: 'Passiva', desc: 'Seus sentidos estao em constante alerta.', effects: ['Esquiva +5%.', 'Esquiva +11%.', 'Esquiva +17%.', 'Esquiva +23%.', 'Esquiva +30%.'] },
+            ass_agil_contra_ataque: { name: 'Contra-Ataque', mana: '25', cd: '8s', desc: 'Aproveita a falha do inimigo para golpear.', effects: ['Multiplicador de dano 1.2x apos esquiva.', 'Multiplicador de dano 1.5x apos esquiva.', 'Multiplicador de dano 1.8x apos esquiva.', 'Multiplicador de dano 2.1x apos esquiva.', 'Multiplicador de dano 2.5x apos esquiva.'] },
+            ass_agil_passo_fantasma: { name: 'Passo Fantasma', mana: '40', cd: '12s', desc: 'Move-se instantaneamente pelas sombras.', effects: ['Alcance de 3 tiles.', 'Alcance de 4 tiles.', 'Alcance de 5 tiles.', 'Alcance de 6 tiles.', 'Alcance de 8 tiles.'] },
+            ass_agil_golpe_nervos: { name: 'Golpe de Nervos', mana: '50', cd: '15s', desc: 'Ataca pontos vitais que bloqueiam a fala.', effects: ['Silencio por 1s.', 'Silencio por 1.8s.', 'Silencio por 2.6s.', 'Silencio por 3.3s.', 'Silencio por 4s.'] },
+            ass_agil_miragem: { name: 'Miragem', mana: '90', cd: '40s', desc: 'Cria ilusoes de si mesmo ao atacar.', effects: ['Clones causam 10% de dano adicional.', 'Clones causam 18% de dano adicional.', 'Clones causam 25% de dano adicional.', 'Clones causam 33% de dano adicional.', 'Clones causam 40% de dano adicional.'] },
+            ass_letal_expor_fraqueza: { name: 'Expor Fraqueza', mana: '30', cd: '10s', desc: 'Identifica a brecha na guarda do alvo.', effects: ['Alvo recebe +10% de dano.', 'Alvo recebe +18% de dano.', 'Alvo recebe +26% de dano.', 'Alvo recebe +33% de dano.', 'Alvo recebe +40% de dano.'] },
+            ass_letal_ocultar: { name: 'Ocultar', mana: '60', cd: '25s', desc: 'Torna-se invisivel a olho nu.', effects: ['Invisibilidade por 5s.', 'Invisibilidade por 10s.', 'Invisibilidade por 15s.', 'Invisibilidade por 22s.', 'Invisibilidade por 30s.'] },
+            ass_letal_emboscada: { name: 'Emboscada', mana: '70', cd: '20s', desc: 'Ataque critico devastador a partir das sombras.', effects: ['Dano de 200% se invisivel.', 'Dano de 275% se invisivel.', 'Dano de 350% se invisivel.', 'Dano de 425% se invisivel.', 'Dano de 500% se invisivel.'] },
+            ass_letal_bomba_fumaca: { name: 'Bomba de Fumaca', mana: '45', cd: '30s', desc: 'Joga uma bomba de fumaca para confundir oponentes.', effects: ['Reduz precisao inimiga em 20%.', 'Reduz precisao inimiga em 35%.', 'Reduz precisao inimiga em 50%.', 'Reduz precisao inimiga em 65%.', 'Reduz precisao inimiga em 80%.'] },
+            ass_letal_sentenca: { name: 'Sentenca', mana: '120', cd: '50s', desc: 'Marca o alvo para a morte iminente.', effects: ['Dano adicional apos 3s: 15% do HP perdido.', 'Dano adicional apos 3s: 22.5% do HP perdido.', 'Dano adicional apos 3s: 30% do HP perdido.', 'Dano adicional apos 3s: 37.5% do HP perdido.', 'Dano adicional apos 3s: 45% do HP perdido.'] }
+        };
+        return catalog[String(skillId || '')] || null;
+    }
+
+    getSkillNodeIcon(node) {
+        const meta = this.getSkillTooltipMeta(String(node?.id || ''));
+        const rawName = String(meta?.name || node?.label || 'SK').trim();
+        const compact = rawName
+            .split(/\s+/)
+            .map((part) => part[0] || '')
+            .join('')
+            .toUpperCase()
+            .slice(0, 2);
+        return compact || 'SK';
+    }
+
+    openSkillTooltip(node, level, clientX, clientY, reason = 'skill_hover') {
+        this.cancelTooltipTimers();
+        const meta = this.getSkillTooltipMeta(String(node?.id || ''));
+        const safeName = this.escapeHtml(String(meta?.name || node?.label || 'Habilidade'));
+        const maxPoints = Math.max(1, Number(node?.maxPoints || 5));
+        const safeLevel = Math.max(0, Math.min(maxPoints, Number(level || 0)));
+        const effectText = this.escapeHtml(
+            meta?.effects?.[Math.max(0, safeLevel - 1)] || meta?.effects?.[0] || 'Sem efeito configurado.'
+        );
+        const mana = this.escapeHtml(String(meta?.mana || '-'));
+        const cd = this.escapeHtml(String(meta?.cd || '-'));
+        const desc = this.escapeHtml(String(meta?.desc || ''));
+        this.tooltipState.activeTooltipId = `skill:${String(node?.id || '')}`;
+        this.tooltipState.lastOpenReason = reason;
+        this.tooltip.style.width = '320px';
+        this.tooltip.innerHTML = `
+            <div><strong>${safeName}</strong></div>
+            <div>Nivel: ${safeLevel}/${maxPoints}</div>
+            <div>Mana: ${mana} | CD: ${cd}</div>
+            <div>${desc}</div>
+            <div>${effectText}</div>
+        `;
+        this.positionTooltip(clientX, clientY);
+        this.tooltip.classList.remove('hidden');
     }
 
     getAutoAttackSkillDefinition(skillId) {
         if (!skillId || skillId === 'class_primary') return { id: 'class_primary', label: 'Atk Basico', source: 'base' };
         const node = this.getSkillNodeById(skillId);
-        if (node && this.isSkillNodeLearned(node.id)) return { id: node.id, label: node.label, source: 'tree' };
+        if (node && this.isSkillNodeLearned(node.id)) return { id: node.id, label: node.label, source: 'tree', classId: node.classId };
         if (this.modularSkillIds.includes(skillId)) {
             if (skillId === 'mod_fire_wing') return { id: 'mod_fire_wing', label: 'Asa de Fogo', source: 'mod' };
             return { id: skillId, label: 'Habilidade Mod.', source: 'mod' };
@@ -1723,7 +2150,9 @@ export class Game {
 
     getAvailableAutoAttackSkills() {
         const result = [{ id: 'class_primary', label: 'Atk Basico', source: 'base' }];
+        const currentClass = this.getCurrentSkillClassId();
         for (const node of this.skillTreeNodes) {
+            if (node.classId !== currentClass) continue;
             if (!node.autoEligible || !this.isSkillNodeLearned(node.id)) continue;
             result.push({ id: node.id, label: node.label, source: 'tree' });
         }
@@ -1793,49 +2222,121 @@ export class Game {
 
     renderSkillsPanel() {
         if (!this.skillsPanel || !this.skillsTreeWrap || !this.skillsPointsLabel) return;
-        if (this.skillsTabHoly) this.skillsTabHoly.classList.toggle('active', this.skillTreeTab === 'holy');
-        if (this.skillsTabBlood) this.skillsTabBlood.classList.toggle('active', this.skillTreeTab === 'blood');
+        const classId = this.getCurrentSkillClassId();
+        const classNodes = this.skillTreeNodes.filter((node) => node.classId === classId);
+        const buildALabel = classNodes.find((node) => node.buildKey === 'buildA')?.buildLabel || 'Build A';
+        const buildBLabel = classNodes.find((node) => node.buildKey === 'buildB')?.buildLabel || 'Build B';
+        if (this.skillTreeTab !== 'buildA' && this.skillTreeTab !== 'buildB') this.skillTreeTab = 'buildA';
+        if (this.skillsTabHoly) {
+            this.skillsTabHoly.textContent = buildALabel;
+            this.skillsTabHoly.classList.toggle('active', this.skillTreeTab === 'buildA');
+        }
+        if (this.skillsTabBlood) {
+            this.skillsTabBlood.textContent = buildBLabel;
+            this.skillsTabBlood.classList.toggle('active', this.skillTreeTab === 'buildB');
+        }
         this.skillsPointsLabel.textContent = `Pont. Hab.: ${this.getSkillPointsAvailable()}`;
 
-        const nodes = this.skillTreeNodes.filter((node) => node.tab === this.skillTreeTab);
+        const nodes = classNodes.filter((node) => node.buildKey === this.skillTreeTab);
         this.skillsTreeWrap.innerHTML = '';
+        const treeWidth = Math.max(320, Number(this.skillsTreeWrap.clientWidth || 0));
+        const nodeHeightPx = 58;
+        const nodeGapPx = 26;
+        const startTopPx = 16;
+        const sidePaddingPx = 10;
+        const nodePositions = new Map();
+
+        nodes.forEach((node, idx) => {
+            const rawLeft = Math.round((Number(node.x || 0) / 100) * treeWidth);
+            const left = Math.max(sidePaddingPx, Math.min(treeWidth - nodeHeightPx - sidePaddingPx, rawLeft));
+            const top = startTopPx + idx * (nodeHeightPx + nodeGapPx);
+            nodePositions.set(node.id, { left, top });
+        });
+
+        const contentHeight = nodes.length
+            ? startTopPx + (nodes.length - 1) * (nodeHeightPx + nodeGapPx) + nodeHeightPx + 16
+            : 360;
+        this.skillsTreeWrap.style.setProperty('--skills-tree-content-height', `${Math.max(360, contentHeight)}px`);
 
         for (const node of nodes) {
             if (!node.prereq) continue;
             const fromNode = nodes.find((it) => it.id === node.prereq);
             if (!fromNode) continue;
+            const fromPos = nodePositions.get(fromNode.id);
+            const toPos = nodePositions.get(node.id);
+            if (!fromPos || !toPos) continue;
             const link = document.createElement('div');
             link.className = 'skills-link';
-            const x = fromNode.x + 5.2;
-            const y = fromNode.y + 14;
-            const height = Math.max(8, node.y - fromNode.y - 8);
-            link.style.left = `${x}%`;
-            link.style.top = `${y}%`;
+            const x = fromPos.left + 27;
+            const y = fromPos.top + nodeHeightPx;
+            const height = Math.max(8, toPos.top - fromPos.top - nodeHeightPx + 2);
+            link.style.left = `${x}px`;
+            link.style.top = `${y}px`;
             link.style.width = '4px';
-            link.style.height = `${height}%`;
+            link.style.height = `${height}px`;
             this.skillsTreeWrap.appendChild(link);
         }
 
         for (const node of nodes) {
-            const level = Number(this.skillTreeState[node.id] || 0);
-            const prereqMet = !node.prereq || this.isSkillNodeLearned(node.prereq);
+            const level = this.getSkillNodeLevel(node.id);
+            const prereqLevel = node.prereq ? this.getSkillNodeLevel(node.prereq) : 0;
+            const prereqMet = !node.prereq || prereqLevel >= 1;
             const canLearn = prereqMet && this.getSkillPointsAvailable() > 0 && level < Number(node.maxPoints || 1);
-            const btn = document.createElement('button');
-            btn.type = 'button';
+            const btn = document.createElement('div');
             btn.className = 'skills-node';
             btn.dataset.nodeId = node.id;
             if (!prereqMet) btn.classList.add('locked');
             if (level > 0) btn.classList.add('learned');
             if (canLearn) btn.classList.add('available');
-            btn.style.left = `${node.x}%`;
-            btn.style.top = `${node.y}%`;
+            const pos = nodePositions.get(node.id) || { left: sidePaddingPx, top: startTopPx };
+            btn.style.left = `${pos.left}px`;
+            btn.style.top = `${pos.top}px`;
             const shortLabel = node.label
                 .replace('Sagrado', 'Sag.')
                 .replace('Sombrio', 'Som.')
                 .replace('Lamina', 'Lam.')
                 .replace('Golpe', 'Gol.');
-            btn.innerHTML = `<span>${shortLabel}</span><span class="lvl">${level}/${node.maxPoints || 1}</span><span class="plus">+</span>`;
+            const iconText = this.getSkillNodeIcon(node);
+            btn.classList.add(node.buildKey === 'buildA' ? 'build-a' : 'build-b');
+            const iconEl = document.createElement('span');
+            iconEl.className = 'skill-icon';
+            iconEl.textContent = iconText;
+            const nameEl = document.createElement('span');
+            nameEl.className = 'skill-name';
+            nameEl.textContent = shortLabel;
+            const lvlEl = document.createElement('span');
+            lvlEl.className = 'lvl';
+            lvlEl.textContent = `${level}/${node.maxPoints || 1}`;
+            const plusEl = document.createElement('button');
+            plusEl.type = 'button';
+            plusEl.className = 'plus skills-learn-btn';
+            plusEl.dataset.nodeId = node.id;
+            plusEl.setAttribute('aria-label', `Aprender ${node.label}`);
+            plusEl.textContent = '+';
+            btn.appendChild(iconEl);
+            btn.appendChild(nameEl);
+            btn.appendChild(lvlEl);
+            btn.appendChild(plusEl);
             btn.title = `${node.label} (${level}/${node.maxPoints || 1})`;
+            btn.addEventListener('mouseenter', (e) => {
+                this.openSkillTooltip(node, level, e.clientX, e.clientY, 'skill_hover');
+            });
+            btn.addEventListener('mousemove', (e) => {
+                this.openSkillTooltip(node, level, e.clientX, e.clientY, 'skill_hover');
+            });
+            btn.addEventListener('mouseleave', () => {
+                this.scheduleTooltipClose();
+            });
+            btn.draggable = level > 0;
+            if (btn.draggable) {
+                btn.addEventListener('dragstart', (e) => {
+                    this.writeDragPayload(e.dataTransfer, {
+                        source: 'skilltree',
+                        skillId: node.id,
+                        skillName: node.label
+                    });
+                });
+            }
             this.skillsTreeWrap.appendChild(btn);
         }
 
@@ -1894,6 +2395,18 @@ export class Game {
             this.triggerConfiguredAutoAttack();
             return;
         }
+        if (binding.type === 'action' && binding.actionId === 'skill_cast' && binding.skillId) {
+            if (!this.selectedMobId || !this.mobs[this.selectedMobId]) {
+                this.onSystemMessage({ text: 'Selecione um mob para usar a habilidade.' });
+                return;
+            }
+            this.network.send({
+                type: 'skill.cast',
+                skillId: String(binding.skillId),
+                targetMobId: this.selectedMobId
+            });
+            return;
+        }
         if (binding.type === 'item') {
             let item = this.inventory.find((it) => String(it.id) === String(binding.itemId));
             if (!item && binding.itemType) {
@@ -1919,6 +2432,14 @@ export class Game {
         if (binding.type === 'action' && binding.actionId === 'basic_attack') {
             return { type: 'action', actionId: 'basic_attack' };
         }
+        if (binding.type === 'action' && binding.actionId === 'skill_cast' && binding.skillId) {
+            return {
+                type: 'action',
+                actionId: 'skill_cast',
+                skillId: String(binding.skillId),
+                skillName: binding.skillName ? String(binding.skillName) : 'Skill'
+            };
+        }
         if (binding.type === 'item' && (binding.itemId || binding.itemType)) {
             return {
                 type: 'item',
@@ -1930,6 +2451,12 @@ export class Game {
         return null;
     }
 
+    getHotbarSkillLabel(name) {
+        const safe = String(name || 'Habilidade').trim();
+        if (safe.length <= 18) return safe;
+        return `${safe.slice(0, 15).trim()}...`;
+    }
+
     renderHotbar() {
         this.skillButtons.forEach((btn) => {
             const key = String(btn.dataset.key || '').toLowerCase();
@@ -1938,6 +2465,7 @@ export class Game {
             let icon = '';
             let title = keyLabel;
             let quantity = null;
+            let iconCssClass = 'slot-icon';
             btn.classList.remove('slot-kind-action', 'slot-kind-item', 'slot-kind-empty', 'slot-icon-attack', 'slot-icon-potion', 'slot-ghosted');
 
             if (binding?.type === 'action' && binding.actionId === 'basic_attack') {
@@ -1945,6 +2473,13 @@ export class Game {
                 const autoSkill = this.getAutoAttackSkillDefinition(this.selectedAutoAttackSkillId);
                 title = autoSkill ? `Auto: ${autoSkill.label}` : 'Ataque Basico';
                 btn.classList.add('slot-kind-action', 'slot-icon-attack');
+            } else if (binding?.type === 'action' && binding.actionId === 'skill_cast') {
+                const node = binding.skillId ? this.getSkillNodeById(String(binding.skillId)) : null;
+                const skillName = String(binding.skillName || node?.label || 'Habilidade');
+                icon = this.getHotbarSkillLabel(skillName);
+                title = skillName;
+                iconCssClass = 'slot-icon slot-icon-skill';
+                btn.classList.add('slot-kind-action');
             } else if (binding?.type === 'item') {
                 let item = this.inventory.find((it) => String(it.id) === String(binding.itemId));
                 const trackedType = String(binding.itemType || item?.type || '');
@@ -1984,7 +2519,7 @@ export class Game {
             const qtyMarkup = Number.isFinite(Number(quantity)) && Number(quantity) > 0
                 ? `<span class="slot-qty">${Number(quantity)}</span>`
                 : '';
-            btn.innerHTML = `<span class="slot-icon">${icon}</span><span class="slot-key">${keyLabel}</span>${qtyMarkup}`;
+            btn.innerHTML = `<span class="${iconCssClass}">${icon}</span><span class="slot-key">${keyLabel}</span>${qtyMarkup}`;
         });
     }
 
@@ -2026,6 +2561,23 @@ export class Game {
             return;
         }
 
+        if (payload.source === 'skilltree' && payload.skillId) {
+            const currentTarget = this.hotbarBindings[targetKey];
+            if (currentTarget?.type === 'action' && currentTarget.actionId === 'basic_attack') {
+                this.onSystemMessage({ text: 'Mova o Ataque Basico para outro slot antes de colocar habilidade aqui.' });
+                return;
+            }
+            this.hotbarBindings[targetKey] = {
+                type: 'action',
+                actionId: 'skill_cast',
+                skillId: String(payload.skillId),
+                skillName: String(payload.skillName || 'Habilidade')
+            };
+            this.persistHotbarBindings();
+            this.renderHotbar();
+            return;
+        }
+
         const itemId = payload.itemId ? String(payload.itemId) : '';
         if (!itemId) return;
         const currentTarget = this.hotbarBindings[targetKey];
@@ -2054,33 +2606,32 @@ export class Game {
         return item || null;
     }
 
-    persistHotbarBindings() {
-        try {
-            if (!window || !window.localStorage) return;
-            const payload = {};
-            for (const key of Object.keys(this.hotbarBindings || {})) {
-                payload[key] = this.normalizeHotbarBinding(this.hotbarBindings[key]);
-            }
-            window.localStorage.setItem(this.hotbarStorageKey, JSON.stringify(payload));
-        } catch {
-            // noop
+    resetHotbarBindingsToDefault() {
+        for (const key of Object.keys(this.hotbarBindings || {})) {
+            this.hotbarBindings[key] = null;
+        }
+        this.hotbarBindings['1'] = { type: 'action', actionId: 'basic_attack' };
+    }
+
+    applyHotbarBindings(rawBindings) {
+        this.resetHotbarBindingsToDefault();
+        const source = rawBindings && typeof rawBindings === 'object' ? rawBindings : {};
+        for (const key of Object.keys(this.hotbarBindings || {})) {
+            if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+            this.hotbarBindings[key] = this.normalizeHotbarBinding(source[key]);
+        }
+        if (!this.hotbarBindings['1']) {
+            this.hotbarBindings['1'] = { type: 'action', actionId: 'basic_attack' };
         }
     }
 
-    loadHotbarBindingsFromStorage() {
-        try {
-            if (!window || !window.localStorage) return;
-            const raw = window.localStorage.getItem(this.hotbarStorageKey);
-            if (!raw) return;
-            const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object') return;
-            for (const key of Object.keys(this.hotbarBindings || {})) {
-                if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
-                this.hotbarBindings[key] = this.normalizeHotbarBinding(parsed[key]);
-            }
-        } catch {
-            // noop
+    persistHotbarBindings() {
+        if (!this.localId) return;
+        const payload = {};
+        for (const key of Object.keys(this.hotbarBindings || {})) {
+            payload[key] = this.normalizeHotbarBinding(this.hotbarBindings[key]);
         }
+        this.network.send({ type: 'hotbar.set', bindings: payload });
     }
 
     writeDragPayload(dataTransfer, payload) {
@@ -2162,11 +2713,15 @@ export class Game {
     createPlayerState(player) {
         const normalizedAllocated = this.normalizeAllocatedStats(player.allocatedStats);
         const unspentPoints = Number.isFinite(Number(player.unspentPoints)) ? Math.max(0, Number(player.unspentPoints)) : 0;
+        const skillLevels = player.skillLevels && typeof player.skillLevels === 'object' ? player.skillLevels : {};
+        const skillPointsAvailable = Number.isFinite(Number(player.skillPointsAvailable)) ? Math.max(0, Number(player.skillPointsAvailable)) : 0;
         return {
             ...player,
             pvpMode: player.pvpMode === 'evil' ? 'evil' : player.pvpMode === 'group' ? 'group' : 'peace',
             dead: Boolean(player.dead),
             allocatedStats: normalizedAllocated,
+            skillLevels,
+            skillPointsAvailable,
             unspentPoints,
             x: player.x,
             y: player.y,
@@ -2225,7 +2780,6 @@ export class Game {
         this.syncGroundItems(message.groundItems || []);
         this.updatePlayerCard();
         this.updateTargetPlayerCard();
-        if (this.skillsPanel && !this.skillsPanel.classList.contains('hidden')) this.renderSkillsPanel();
     }
 
     /**
@@ -2260,6 +2814,8 @@ export class Game {
             p.xpToNext = incoming.xpToNext;
             p.equippedWeaponName = incoming.equippedWeaponName || null;
             p.stats = incoming.stats;
+            p.skillLevels = incoming.skillLevels && typeof incoming.skillLevels === 'object' ? incoming.skillLevels : (p.skillLevels || {});
+            p.skillPointsAvailable = Number.isFinite(Number(incoming.skillPointsAvailable)) ? Math.max(0, Number(incoming.skillPointsAvailable)) : Number(p.skillPointsAvailable || 0);
             p.allocatedStats = this.normalizeAllocatedStats(incoming.allocatedStats);
             p.unspentPoints = Number.isFinite(Number(incoming.unspentPoints)) ? Math.max(0, Number(incoming.unspentPoints)) : 0;
             p.pathNodes = Array.isArray(incoming.pathNodes) ? incoming.pathNodes : [];
@@ -2373,13 +2929,18 @@ export class Game {
                 }
                 if (String(item.type || '') === 'potion_hp') {
                     itemEl.title = `${item.name}\nRecupera 50% do HP ao usar.\nQtd: ${quantity}`;
+                } else if (String(item.type || '') === 'skill_reset_hourglass') {
+                    itemEl.title = `${item.name}\nReseta todas as habilidades aprendidas e devolve os pontos.\nQtd: ${quantity}`;
                 } else {
                     itemEl.title = `${item.name}\nPATK +${item.bonuses?.physicalAttack || 0}\nMATK +${item.bonuses?.magicAttack || 0}\nMS +${item.bonuses?.moveSpeed || 0}\nASPD +${item.bonuses?.attackSpeed || 0}%`;
                 }
                 itemEl.addEventListener('dblclick', () => {
-                    if (String(item.type || '') !== 'weapon') return;
-                    this.closeAllTooltips('item_equipped');
-                    this.network.send({ type: 'equip_req', itemId: item.id === this.equippedWeaponId ? null : item.id });
+                    if (String(item.type || '') === 'weapon') {
+                        this.closeAllTooltips('item_equipped');
+                        this.network.send({ type: 'equip_req', itemId: item.id === this.equippedWeaponId ? null : item.id });
+                        return;
+                    }
+                    this.network.send({ type: 'item.use', itemId: item.id });
                 });
                 itemEl.addEventListener('mousemove', (e) => {
                     this.openItemTooltip(item, e.clientX, e.clientY, 'hover');
@@ -2421,16 +2982,26 @@ export class Game {
     /**
      * Exibe tooltip do item no cursor.
      */
-    openItemTooltip(item, clientX, clientY, reason = 'hover') {
+    openItemTooltip(item, clientX, clientY, reason = 'hover', options = null) {
         this.cancelTooltipTimers();
         this.tooltipState.activeTooltipId = item.id;
         this.tooltipState.lastOpenReason = reason;
+        this.tooltip.style.width = '220px';
         if (String(item.type || '') === 'potion_hp') {
             const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
             this.tooltip.innerHTML = `
                 <div><strong>${item.name}</strong></div>
                 <div>Consumivel</div>
                 <div>Restaura 50% do HP</div>
+                <div>Qtd: ${quantity}</div>
+            `;
+        } else if (String(item.type || '') === 'skill_reset_hourglass') {
+            const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+            this.tooltip.innerHTML = `
+                <div><strong>${item.name}</strong></div>
+                <div>Consumivel</div>
+                <div>Reseta todas as habilidades aprendidas</div>
+                <div>Devolve todos os pontos gastos</div>
                 <div>Qtd: ${quantity}</div>
             `;
         } else {
@@ -2442,9 +3013,34 @@ export class Game {
                 <div>ASPD: +${item.bonuses?.attackSpeed || 0}%</div>
             `;
         }
-        this.tooltip.style.left = `${clientX + 12}px`;
-        this.tooltip.style.top = `${clientY + 12}px`;
+        this.positionTooltip(clientX, clientY, options);
         this.tooltip.classList.remove('hidden');
+    }
+
+    positionTooltip(clientX, clientY, options = null) {
+        const cfg = options && typeof options === 'object' ? options : {};
+        const margin = 8;
+
+        this.tooltip.classList.remove('hidden');
+        this.tooltip.style.visibility = 'hidden';
+        const rect = this.tooltip.getBoundingClientRect();
+
+        let left = Number(clientX || 0) + 12;
+        let top = Number(clientY || 0) + 12;
+        if (cfg.placement === 'top-right' && cfg.anchorElement?.getBoundingClientRect) {
+            const anchorRect = cfg.anchorElement.getBoundingClientRect();
+            left = anchorRect.right + 8;
+            top = anchorRect.top - rect.height - 8;
+        }
+
+        const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+        const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+        left = Math.max(margin, Math.min(left, maxLeft));
+        top = Math.max(margin, Math.min(top, maxTop));
+
+        this.tooltip.style.left = `${left}px`;
+        this.tooltip.style.top = `${top}px`;
+        this.tooltip.style.visibility = 'visible';
     }
 
     scheduleTooltipClose() {
@@ -2471,6 +3067,7 @@ export class Game {
         this.tooltipState.anchorElementId = null;
         this.tooltipState.isPinned = false;
         this.tooltipState.lastOpenReason = reason;
+        this.tooltip.style.visibility = 'visible';
         this.tooltip.classList.add('hidden');
     }
 
@@ -3764,10 +4361,214 @@ export class Game {
      * Ajusta canvas para o tamanho da janela.
      */
     resize() {
-        this.canvas.width = Math.max(960, window.innerWidth || this.baseRenderWidth);
-        this.canvas.height = Math.max(540, window.innerHeight || this.baseRenderHeight);
+        const viewportW = Math.max(320, Number(window.innerWidth || this.baseRenderWidth || 1366));
+        const viewportH = Math.max(240, Number(window.innerHeight || this.baseRenderHeight || 768));
+        const rawZoomScale = this.getRawBrowserZoomScale();
+        const clampedZoomScale = this.getClampedGameZoomScale();
+        this.currentGameZoomScale = clampedZoomScale;
+
+        // Dentro do intervalo [67%, 150%], mantém o comportamento normal.
+        // Fora do intervalo, compensa o zoom para congelar a expansão/contração do mapa.
+        const freezeFactor = rawZoomScale / Math.max(0.0001, clampedZoomScale);
+        this.canvas.width = Math.max(960, Math.floor(viewportW * freezeFactor));
+        this.canvas.height = Math.max(540, Math.floor(viewportH * freezeFactor));
         this.canvas.style.width = '100vw';
         this.canvas.style.height = '100vh';
+        this.updateHudLayout();
+    }
+
+    getRawBrowserZoomScale() {
+        const baseDpr = Number(this.baseDevicePixelRatio || 1);
+        const currentDpr = Number(window.devicePixelRatio || 1);
+        if (!Number.isFinite(baseDpr) || baseDpr <= 0) return 1;
+        if (!Number.isFinite(currentDpr) || currentDpr <= 0) return 1;
+        return currentDpr / baseDpr;
+    }
+
+    getClampedGameZoomScale() {
+        const raw = this.getRawBrowserZoomScale();
+        return Math.max(this.minGameZoomScale, Math.min(this.maxGameZoomScale, raw));
+    }
+
+    isHudElementVisible(el) {
+        if (!el) return false;
+        if (el.classList?.contains('hidden')) return false;
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    }
+
+    rectsOverlap(a, b) {
+        if (!a || !b) return false;
+        return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    }
+
+    nudgeBottom(el, deltaPx) {
+        if (!el || deltaPx <= 0) return;
+        const current = Number.parseFloat(window.getComputedStyle(el).bottom) || 0;
+        el.style.bottom = `${Math.max(0, current + deltaPx)}px`;
+    }
+
+    nudgeBottomByInline(el, deltaPx) {
+        if (!el || deltaPx <= 0) return;
+        const currentInline = Number.parseFloat(String(el.style.bottom || '0')) || 0;
+        el.style.bottom = `${Math.max(0, currentInline + deltaPx)}px`;
+    }
+
+    nudgeTop(el, deltaPx) {
+        if (!el || deltaPx <= 0) return;
+        const current = Number.parseFloat(window.getComputedStyle(el).top) || 0;
+        el.style.top = `${Math.max(0, current + deltaPx)}px`;
+    }
+
+    resolveHudCollisions() {
+        const gap = 10;
+        const card = this.playerCard;
+        const minimap = this.minimapWrap;
+        const chat = this.chatWrap;
+        const skillbar = this.skillbarWrap;
+        const menus = this.menusWrap;
+
+        // Reset ajustes dinâmicos antes de calcular novamente.
+        if (card) card.style.top = '';
+        if (minimap) minimap.style.top = '';
+        if (chat) chat.style.bottom = '';
+        if (skillbar) skillbar.style.bottom = '';
+        if (menus) menus.style.bottom = '';
+
+        if (this.isHudElementVisible(card) && this.isHudElementVisible(minimap)) {
+            const cardRect = card.getBoundingClientRect();
+            const mapRect = minimap.getBoundingClientRect();
+            if (this.rectsOverlap(cardRect, mapRect)) {
+                this.nudgeTop(minimap, Math.ceil(cardRect.bottom - mapRect.top) + gap);
+            }
+        }
+
+        if (this.isHudElementVisible(chat) && this.isHudElementVisible(skillbar)) {
+            const chatRect = chat.getBoundingClientRect();
+            const skillRect = skillbar.getBoundingClientRect();
+            if (this.rectsOverlap(chatRect, skillRect)) {
+                this.nudgeBottom(chat, Math.ceil(chatRect.bottom - skillRect.top) + gap);
+            }
+        }
+
+        if (this.isHudElementVisible(menus) && this.isHudElementVisible(skillbar)) {
+            const menuRect = menus.getBoundingClientRect();
+            const skillRect = skillbar.getBoundingClientRect();
+            if (this.rectsOverlap(menuRect, skillRect)) {
+                this.nudgeBottomByInline(skillbar, Math.ceil(menuRect.bottom - skillRect.top) + gap);
+            }
+        }
+
+        if (this.isHudElementVisible(chat) && this.isHudElementVisible(menus)) {
+            const chatRect = chat.getBoundingClientRect();
+            const menuRect = menus.getBoundingClientRect();
+            if (this.rectsOverlap(chatRect, menuRect)) {
+                this.nudgeBottom(menus, Math.ceil(chatRect.bottom - menuRect.top) + gap);
+            }
+        }
+    }
+
+    updateHudLayout() {
+        const w = Number(window.innerWidth || this.baseRenderWidth || 1366);
+        const h = Number(window.innerHeight || this.baseRenderHeight || 768);
+        const rawZoomScale = this.getRawBrowserZoomScale();
+        const clampedZoomScale = this.getClampedGameZoomScale();
+        const freezeFactor = rawZoomScale / Math.max(0.0001, clampedZoomScale);
+        const layoutW = w * freezeFactor;
+        const layoutH = h * freezeFactor;
+        const baseScale = Math.min(layoutW / 1920, layoutH / 1080);
+        const usingDebug = this.playerRole === 'adm' && Boolean(this.hudDebugToggle?.checked);
+        const minRaw = Number(this.hudScaleMinInput?.value || 84) / 100;
+        const maxRaw = Number(this.hudScaleMaxInput?.value || 106) / 100;
+        const safeMin = Math.max(0.7, Math.min(1.1, minRaw));
+        const safeMaxBase = Math.max(0.9, Math.min(1.4, maxRaw));
+        const safeMax = Math.max(safeMin + 0.02, safeMaxBase);
+        const hudScale = usingDebug
+            ? Math.max(safeMin, Math.min(safeMax, baseScale))
+            : Math.max(0.84, Math.min(1.06, baseScale));
+        document.documentElement.style.setProperty('--hud-scale', hudScale.toFixed(3));
+        document.documentElement.style.setProperty('--hud-gap', `${Math.max(10, Math.floor(Math.min(layoutW, layoutH) * 0.016))}px`);
+
+        document.body.classList.toggle('hud-compact', layoutW < 1500 || layoutH < 900);
+        document.body.classList.toggle('hud-ultra-compact', layoutW < 1280 || layoutH < 760);
+
+        const hudZoomComp = 1 / Math.max(0.0001, clampedZoomScale);
+        this.applyHudZoomComp(hudZoomComp);
+        this.applyAdaptiveChatMode(layoutW, layoutH);
+
+        this.resolveHudCollisions();
+    }
+
+    applyHudZoomComp(scale) {
+        const safe = Math.max(0.6, Math.min(1.6, Number(scale || 1)));
+        const zoomValue = safe.toFixed(3);
+        const targets = [
+            this.playerCard,
+            this.targetPlayerCard,
+            this.minimapWrap,
+            this.chatWrap,
+            this.skillbarWrap,
+            this.menusWrap,
+            this.partyFrames,
+            this.partyNotifications,
+            this.friendsNotifications
+        ];
+        for (const el of targets) {
+            if (!el || !el.style) continue;
+            el.style.zoom = zoomValue;
+        }
+    }
+
+    updateHudDebugPanelUI() {
+        const isAdmin = this.playerRole === 'adm';
+        const enabled = isAdmin && Boolean(this.hudDebugToggle?.checked);
+        if (this.hudDebugPanel) this.hudDebugPanel.classList.toggle('hidden', !enabled);
+        if (this.hudScaleMinValue && this.hudScaleMinInput) this.hudScaleMinValue.textContent = `${this.hudScaleMinInput.value}%`;
+        if (this.hudScaleMaxValue && this.hudScaleMaxInput) this.hudScaleMaxValue.textContent = `${this.hudScaleMaxInput.value}%`;
+    }
+
+    deriveAutoChatLayoutMode(layoutW, layoutH) {
+        if (layoutW < 1280 || layoutH < 760) return 'mini';
+        if (layoutW < 1500 || layoutH < 900) return 'compact';
+        return 'expanded';
+    }
+
+    setChatLayoutMode(mode) {
+        if (!this.chatWrap) return;
+        const safeMode = mode === 'mini' || mode === 'compact' ? mode : 'expanded';
+        this.chatWrap.classList.toggle('chat-compact', safeMode === 'compact');
+        this.chatWrap.classList.toggle('chat-mini', safeMode === 'mini');
+        // Mantem compatibilidade com o estilo antigo.
+        this.chatWrap.classList.toggle('minimized', safeMode === 'mini');
+        if (this.chatToggle) {
+            const label = safeMode === 'mini' ? 'Mini' : safeMode === 'compact' ? 'Compacto' : 'Completo';
+            this.chatToggle.textContent = `Chat: ${label}`;
+        }
+        if (Array.isArray(this.chatModeOptions)) {
+            this.chatModeOptions.forEach((btn) => {
+                const modeKey = String(btn.dataset.mode || '');
+                btn.classList.toggle('active', modeKey === safeMode);
+            });
+        }
+    }
+
+    cycleChatLayoutMode() {
+        const current = this.chatWrap?.classList?.contains('chat-mini')
+            ? 'mini'
+            : this.chatWrap?.classList?.contains('chat-compact')
+                ? 'compact'
+                : 'expanded';
+        const next = current === 'expanded' ? 'compact' : current === 'compact' ? 'mini' : 'expanded';
+        this.chatLayoutOverrideMode = next;
+        this.setChatLayoutMode(next);
+    }
+
+    applyAdaptiveChatMode(layoutW, layoutH) {
+        if (!this.chatWrap) return;
+        const autoMode = this.deriveAutoChatLayoutMode(layoutW, layoutH);
+        const forced = this.chatLayoutOverrideMode || null;
+        const mode = forced || autoMode;
+        this.setChatLayoutMode(mode);
     }
 
     /**
@@ -3795,12 +4596,12 @@ export class Game {
 
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
-                const mapCol = Math.max(0, Math.min(maxCol, startCol + col));
-                const mapRow = Math.max(0, Math.min(maxRow, startRow + row));
-                const worldX = mapCol * this.tileSize;
-                const worldY = mapRow * this.tileSize;
-                const screenX = worldX - this.camera.x;
-                const screenY = worldY - this.camera.y;
+                const rawCol = startCol + col;
+                const rawRow = startRow + row;
+                const mapCol = Math.max(0, Math.min(maxCol, rawCol));
+                const mapRow = Math.max(0, Math.min(maxRow, rawRow));
+                const screenX = rawCol * this.tileSize - this.camera.x;
+                const screenY = rawRow * this.tileSize - this.camera.y;
                 const t = this.mapTiles[mapRow * this.mapCols + mapCol];
                 this.drawTerrainCell(screenX, screenY, this.tileSize, t, mapCol, mapRow);
             }
@@ -4357,6 +5158,41 @@ export class Game {
         this.ctx.restore();
     }
 
+    drawSkillEffects() {
+        if (!this.skillEffects.length) return;
+        const now = Date.now();
+        const alive = [];
+        for (const fx of this.skillEffects) {
+            if (Number(fx.expiresAt || 0) <= now) continue;
+            const life = Math.max(0, Math.min(1, (now - fx.startedAt) / Math.max(1, fx.expiresAt - fx.startedAt)));
+            const alpha = 1 - life;
+            const radius = 18 + life * 28;
+            const sx = fx.x - this.camera.x;
+            const sy = fx.y - this.camera.y;
+            let color = '120,190,255';
+            const key = String(fx.effectKey || '');
+            if (key.startsWith('war_')) color = '230,180,80';
+            else if (key.startsWith('arc_')) color = '170,230,255';
+            else if (key.startsWith('dru_')) color = '120,245,160';
+            else if (key.startsWith('ass_')) color = '195,120,255';
+            else if (key.startsWith('mod_')) color = '255,145,80';
+
+            this.ctx.save();
+            this.ctx.strokeStyle = `rgba(${color}, ${Math.max(0.15, alpha * 0.8)})`;
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+            this.ctx.stroke();
+            this.ctx.fillStyle = `rgba(${color}, ${Math.max(0.08, alpha * 0.22)})`;
+            this.ctx.beginPath();
+            this.ctx.arc(sx, sy, Math.max(8, radius * 0.42), 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.restore();
+            alive.push(fx);
+        }
+        this.skillEffects = alive;
+    }
+
     drawCombatProjectiles() {
         if (!this.combatProjectiles.length) return;
         const now = Date.now();
@@ -4445,11 +5281,15 @@ export class Game {
     updateAdminMapSettings() {
         const isAdmin = this.playerRole === 'adm';
         if (this.pathDebugSetting) this.pathDebugSetting.classList.toggle('hidden', !isAdmin);
+        if (this.hudDebugSetting) this.hudDebugSetting.classList.toggle('hidden', !isAdmin);
         if (this.mobPeacefulSetting) this.mobPeacefulSetting.classList.toggle('hidden', !isAdmin);
         if (!isAdmin) {
             this.pathDebugEnabled = false;
             if (this.pathDebugToggle) this.pathDebugToggle.checked = false;
+            if (this.hudDebugToggle) this.hudDebugToggle.checked = false;
+            if (this.hudDebugPanel) this.hudDebugPanel.classList.add('hidden');
         }
+        this.updateHudDebugPanelUI();
     }
 
     /**
@@ -4473,7 +5313,7 @@ export class Game {
     draw() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.smoothEntities();
-        this.updatePendingPickup();
+        this.processPendingPickup();
 
         if (this.localId && this.players[this.localId]) {
             const me = this.players[this.localId];
@@ -4490,6 +5330,7 @@ export class Game {
         this.drawMobs();
         this.drawGroundItems();
         this.drawPlayers();
+        this.drawSkillEffects();
         this.drawCombatProjectiles();
         this.drawMinimap();
         this.drawWorldMapPanel();

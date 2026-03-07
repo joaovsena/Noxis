@@ -1,6 +1,6 @@
 export interface PlayerRuntime {
     id: number;
-    userId: number;
+    userId: string | number;
     username: string;
     name: string;
     class: string;
@@ -37,6 +37,8 @@ export interface PlayerRuntime {
     deathY?: number;
     partyId?: string | null;
     skillCooldowns?: Record<string, number>;
+    skillLevels?: Record<string, number>;
+    activeSkillEffects?: Array<any>;
     movePath?: Array<{ x: number; y: number }>;
     nextPathfindAt?: number;
     pathDestinationX?: number;
@@ -96,6 +98,18 @@ export interface AuthMessage {
     password: string;
     name?: string;
     class?: string;
+}
+
+export interface CharacterCreateMessage {
+    type: 'character_create';
+    name: string;
+    class: string;
+    gender?: string;
+}
+
+export interface CharacterEnterMessage {
+    type: 'character_enter';
+    slot?: number;
 }
 
 export interface MoveMessage {
@@ -298,8 +312,20 @@ export interface SkillCastMessage {
     targetPlayerId?: number | null;
 }
 
+export interface SkillLearnMessage {
+    type: 'skill.learn';
+    skillId: string;
+}
+
+export interface HotbarSetMessage {
+    type: 'hotbar.set';
+    bindings: Record<string, any>;
+}
+
 export type WSMessage =
     | AuthMessage
+    | CharacterCreateMessage
+    | CharacterEnterMessage
     | MoveMessage
     | TargetMobMessage
     | ChatMessage
@@ -336,4 +362,6 @@ export type WSMessage =
     | CombatTargetPlayerMessage
     | CombatClearTargetMessage
     | PlayerReviveMessage
-    | SkillCastMessage;
+    | SkillCastMessage
+    | SkillLearnMessage
+    | HotbarSetMessage;
