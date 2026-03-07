@@ -1189,6 +1189,10 @@ export class Game {
         const ux = dx / len;
         const uy = dy / len;
 
+        if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+            p.facing = this.resolveFacing(dx, dy);
+        }
+
         p.hitAnim = { until: Date.now() + 120, ox: ux * 8, oy: uy * 8 };
         p.attackAnim = { startedAt: Date.now(), until: Date.now() + 420 };
         if (p.class === 'bandit' || p.class === 'assassin' || p.class === 'archer') this.banditSwingTick[String(p.id)] = (this.banditSwingTick[String(p.id)] || 0) + 1;
@@ -1214,6 +1218,11 @@ export class Game {
             target.hitAnim = { until: Date.now() + 140, ox: 0, oy: -6 };
         }
         if (attacker) {
+            const dx = Number(message.targetX ?? (target ? target.x : attacker.x)) - Number(message.attackerX ?? attacker.x);
+            const dy = Number(message.targetY ?? (target ? target.y : attacker.y)) - Number(message.attackerY ?? attacker.y);
+            if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+                attacker.facing = this.resolveFacing(dx, dy);
+            }
             attacker.attackAnim = { startedAt: Date.now(), until: Date.now() + 300 };
             if (attacker.class === 'bandit' || attacker.class === 'assassin' || attacker.class === 'archer') this.banditSwingTick[String(attacker.id)] = (this.banditSwingTick[String(attacker.id)] || 0) + 1;
             if (attacker.class === 'shifter' || attacker.class === 'druid') {
@@ -4848,12 +4857,12 @@ export class Game {
 
             const deltaMs = now - (p.animLastAt || now);
             p.animLastAt = now;
-            if (moving) p.animMs = (p.animMs || 0) + deltaMs;
-            else p.animMs = 0;
+            p.animMs = (p.animMs || 0) + deltaMs;
             p.animLastX = p.x;
             p.animLastY = p.y;
             const attackAnimMs = attacking ? now - p.attackAnim.startedAt : null;
-            const attackMode = 'unarmed';
+            const hasWeaponVisual = Boolean(this.getEquippedWeaponVisualKey(p));
+            const attackMode = hasWeaponVisual ? 'armed' : 'unarmed';
 
             const frame = this.sprites.getPlayerFrame(
                 p.class,
@@ -4863,7 +4872,10 @@ export class Game {
                 attackAnimMs,
                 attackMode
             );
-            if (frame.image) {
+            const usesLayeredFrame = Boolean(frame && Array.isArray(frame.layers) && frame.layers.length > 0);
+            if (usesLayeredFrame) {
+                this.drawLayeredPlayerFrame(frame, screenX, screenY);
+            } else if (frame.image) {
                 const drawW = 50;
                 const drawH = 80;
                 const drawX = screenX - 20;
@@ -4947,12 +4959,13 @@ export class Game {
                 this.drawProceduralCharacter(p, screenX, screenY, moving, attacking, now);
             }
 
-            this.drawEquippedWeaponSprite(p, screenX, screenY, moving, attacking, now);
+            // Weapon visuals are now fully driven by paperdoll layers (pONE pages).
 
             this.ctx.fillStyle = '#fff';
             this.ctx.textAlign = 'center';
             this.ctx.font = 'bold 13px Arial';
-            this.ctx.fillText(`${p.name} Lv.${p.level}`, screenX, screenY - 30);
+            const nameY = usesLayeredFrame ? (screenY - 56) : (screenY - 30);
+            this.ctx.fillText(`${p.name} Lv.${p.level}`, screenX, nameY);
 
             const bubble = this.chatBubbles[id];
             if (bubble && bubble.expiresAt > now) {
@@ -4977,6 +4990,60 @@ export class Game {
             } else if (bubble) {
                 delete this.chatBubbles[id];
             }
+        }
+    }
+
+    drawLayeredPlayerFrame(frame, screenX, screenY) {
+        const drawW = 112;
+        const drawH = 148;
+        const drawX = screenX - Math.floor(drawW / 2);
+        const drawY = screenY - 88;
+        const layers = frame.layers || [];
+        if (!layers.length) return;
+
+        if (frame.mirror) {
+            this.ctx.save();
+            this.ctx.translate(screenX, 0);
+            this.ctx.scale(-1, 1);
+            for (const layer of layers) {
+                if (!layer?.image || !layer?.source) continue;
+                this.ctx.drawImage(
+                    layer.image,
+                    layer.source.x,
+                    layer.source.y,
+                    layer.source.w,
+                    layer.source.h,
+                    -Math.floor(drawW / 2),
+                    drawY,
+                    drawW,
+                    drawH
+                );
+            }
+            if (frame.tint) {
+                this.ctx.fillStyle = frame.tint;
+                this.ctx.fillRect(-Math.floor(drawW / 2), drawY, drawW, drawH);
+            }
+            this.ctx.restore();
+            return;
+        }
+
+        for (const layer of layers) {
+            if (!layer?.image || !layer?.source) continue;
+            this.ctx.drawImage(
+                layer.image,
+                layer.source.x,
+                layer.source.y,
+                layer.source.w,
+                layer.source.h,
+                drawX,
+                drawY,
+                drawW,
+                drawH
+            );
+        }
+        if (frame.tint) {
+            this.ctx.fillStyle = frame.tint;
+            this.ctx.fillRect(drawX, drawY, drawW, drawH);
         }
     }
 

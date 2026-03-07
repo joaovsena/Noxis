@@ -18,7 +18,10 @@ services:
     restart: unless-stopped
 
   app:
-    image: jseena/noxis-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: noxis-app:local
     container_name: noxis-app
     depends_on:
       db:

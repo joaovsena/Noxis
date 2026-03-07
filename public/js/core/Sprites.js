@@ -5,56 +5,16 @@ export class Sprites {
     constructor() {
         this.playerSprites = {};
         this.atlasByClass = {};
+        this.paperdollByClass = {};
         this.pendingAtlasJson = {};
         this.pendingAtlasImage = {};
 
         // Fallback removido - arquivos não existem. Use apenas atlas configurado.
 
-        // Cavaleiro via atlas (atlas.png + atlas.json).
-        this.loadAtlas(
-            'knight',
-            '/assets/sprites/cavaleiro/cavaleiro_corpo_atlas.png',
-            '/assets/sprites/cavaleiro/cavaleiro_corpo_atlas.json',
-            {
-                spin360: ['r00_f00', 'r00_f01', 'r00_f02', 'r00_f03', 'r00_f04'],
-                walk_s: ['r01_f00', 'r01_f01', 'r01_f02', 'r01_f03', 'r01_f04', 'r01_f05', 'r01_f06', 'r01_f07'],
-                walk_sw: ['r02_f00', 'r02_f01', 'r02_f02', 'r02_f03', 'r02_f04', 'r02_f05', 'r02_f06', 'r02_f07'],
-                walk_w: ['r03_f00', 'r03_f01', 'r03_f02', 'r03_f03', 'r03_f04', 'r03_f05', 'r03_f06', 'r03_f07'],
-                walk_nw: ['r04_f00', 'r04_f01', 'r04_f02', 'r04_f03', 'r04_f04', 'r04_f05', 'r04_f06', 'r04_f07'],
-                walk_n: ['r05_f00', 'r05_f01', 'r05_f02', 'r05_f03', 'r05_f04', 'r05_f05', 'r05_f06', 'r05_f07'],
-                // Combate: primeira linha (f00..f05) = desarmado, segunda (f06..f11) = armado.
-                attack_unarmed_nw: ['r06_f00', 'r06_f01', 'r06_f02', 'r06_f03', 'r06_f04', 'r06_f05'],
-                attack_armed_nw: ['r06_f06', 'r06_f07', 'r06_f08', 'r06_f09', 'r06_f10', 'r06_f11'],
-                attack_unarmed_w: ['r07_f00', 'r07_f01', 'r07_f02', 'r07_f03', 'r07_f04', 'r07_f05'],
-                attack_armed_w: ['r07_f06', 'r07_f07', 'r07_f08', 'r07_f09', 'r07_f10', 'r07_f11'],
-                attack_unarmed_sw: ['r08_f00', 'r08_f01', 'r08_f02', 'r08_f03', 'r08_f04', 'r08_f05'],
-                attack_armed_sw: ['r08_f06', 'r08_f07', 'r08_f08', 'r08_f09', 'r08_f10', 'r08_f11'],
-                idle_s: 'r01_f00',
-                idle_sw: 'r02_f00',
-                idle_w: 'r03_f00',
-                idle_nw: 'r04_f00',
-                idle_n: 'r05_f00'
-            },
-            '/assets/sprites/cavaleiro/cavaleiro_cabeca_atlas.png',
-            '/assets/sprites/cavaleiro/cavaleiro_cabeca_atlas.json',
-            {
-                idle_s: 'r00_f00',
-                idle_sw: 'r00_f01',
-                idle_w: 'r00_f02',
-                idle_nw: 'r00_f03',
-                idle_n: 'r00_f04',
-                walk_s: ['r00_f00'],
-                walk_sw: ['r00_f01'],
-                walk_w: ['r00_f02'],
-                walk_nw: ['r00_f03'],
-                walk_n: ['r00_f04'],
-                attack_s: ['r00_f00'],
-                attack_sw: ['r00_f01'],
-                attack_w: ['r00_f02'],
-                attack_nw: ['r00_f03'],
-                attack_n: ['r00_f04']
-            }
-        );
+        this.loadPaperdollForClass('archer', 'v00');
+        this.loadPaperdollForClass('knight', 'v01');
+        this.loadPaperdollForClass('druid', 'v09');
+        this.loadPaperdollForClass('assassin', 'v10');
     }
 
     getClassTint(className) {
@@ -187,14 +147,18 @@ export class Sprites {
      * Retorna frame para desenhar (atlas recortado ou imagem unica).
      */
     getPlayerFrame(className, facing, moving, animTimeMs, attackAnimMs = null, attackMode = 'unarmed') {
-        const atlas = this.atlasByClass[className];
+        const normalizedClass = this.normalizeClassName(className);
+        const paperdollFrame = this.getPaperdollFrame(normalizedClass, facing, moving, animTimeMs, attackAnimMs, attackMode);
+        if (paperdollFrame) return paperdollFrame;
+
+        const atlas = this.atlasByClass[normalizedClass];
         if (atlas) {
-            const frame = this.getAtlasFrame(className, atlas, facing, moving, animTimeMs, attackAnimMs, attackMode);
-            frame.tint = this.getClassTint(className);
+            const frame = this.getAtlasFrame(normalizedClass, atlas, facing, moving, animTimeMs, attackAnimMs, attackMode);
+            frame.tint = this.getClassTint(normalizedClass);
             return frame;
         }
 
-        return { className, image: this.getPlayerSprite(className), mirror: false, source: null, head: null, tint: this.getClassTint(className) };
+        return { className: normalizedClass, image: this.getPlayerSprite(normalizedClass), mirror: false, source: null, head: null, tint: this.getClassTint(normalizedClass) };
     }
 
     /**
@@ -286,5 +250,233 @@ export class Sprites {
      */
     getPlayerSprite(className) {
         return this.playerSprites[className] || null;
+    }
+
+    normalizeClassName(className) {
+        const raw = String(className || '').trim().toLowerCase();
+        if (raw === 'cavaleiro') return 'knight';
+        if (raw === 'arqueiro') return 'archer';
+        if (raw === 'druida' || raw === 'shifter') return 'druid';
+        if (raw === 'assassino' || raw === 'bandit') return 'assassin';
+        if (raw === 'knight' || raw === 'archer' || raw === 'druid' || raw === 'assassin') return raw;
+        return 'knight';
+    }
+
+    loadPaperdollForClass(className, variant = 'v01') {
+        const files = {
+            p1_base: `/assets/animacoes/char_a_p1/char_a_p1_0bas_humn_${variant}.png`,
+            pONE1_base: `/assets/animacoes/char_a_pONE1/char_a_pONE1_0bas_humn_${variant}.png`,
+            pONE1_weapon: `/assets/animacoes/char_a_pONE1/6tla/char_a_pONE1_6tla_sw01_${variant}.png`,
+            pONE1_shield: `/assets/animacoes/char_a_pONE1/7tlb/char_a_pONE1_7tlb_sh01_${variant}.png`,
+            pONE2_base: `/assets/animacoes/char_a_pONE2/char_a_pONE2_0bas_humn_${variant}.png`,
+            pONE2_weapon: `/assets/animacoes/char_a_pONE2/6tla/char_a_pONE2_6tla_sw01_${variant}.png`,
+            pONE2_shield: `/assets/animacoes/char_a_pONE2/7tlb/char_a_pONE2_7tlb_sh01_${variant}.png`
+        };
+        const loaded = {};
+        const keys = Object.keys(files);
+        let pending = keys.length;
+        const done = () => {
+            pending -= 1;
+            if (pending > 0) return;
+            if (!loaded.p1_base) return;
+            this.paperdollByClass[className] = {
+                cell: 64,
+                variant,
+                pages: {
+                    p1: { base: loaded.p1_base },
+                    pONE1: { base: loaded.pONE1_base, weapon: loaded.pONE1_weapon, shield: loaded.pONE1_shield },
+                    pONE2: { base: loaded.pONE2_base, weapon: loaded.pONE2_weapon, shield: loaded.pONE2_shield }
+                },
+                timing: {
+                    walk: [135, 135, 135, 135, 135, 135],
+                    combatIdle: [140, 140, 140, 140],
+                    combatMove: [110, 110, 110, 110],
+                    attackSlash: [95, 95, 95, 95, 95, 95]
+                }
+            };
+        };
+        for (const key of keys) {
+            const img = new Image();
+            img.onload = () => {
+                loaded[key] = img;
+                done();
+            };
+            img.onerror = () => {
+                loaded[key] = null;
+                done();
+            };
+            img.src = files[key];
+        }
+    }
+
+    getPaperdollFrame(className, facing, moving, animTimeMs, attackAnimMs = null, attackMode = 'unarmed') {
+        const paperdoll = this.paperdollByClass[className];
+        if (!paperdoll) return null;
+        const mapped = this.mapPaperdollFacing(facing);
+        if (!mapped) return null;
+
+        const armed = attackMode === 'armed';
+        const attacking = attackAnimMs !== null;
+        let pageKey = 'p1';
+        let row = mapped.row;
+        let cols = [0];
+        let durations = [99999];
+        let includeTools = false;
+
+        if (attacking) {
+            pageKey = 'pONE1';
+            row = mapped.row;
+            cols = [0, 1, 2, 3, 4, 5];
+            durations = paperdoll.timing.attackSlash;
+            includeTools = armed;
+        } else if (armed && moving) {
+            pageKey = 'pONE2';
+            row = mapped.row;
+            cols = [4, 5, 6, 7];
+            durations = paperdoll.timing.combatMove;
+            includeTools = true;
+        } else if (armed) {
+            pageKey = 'pONE2';
+            row = mapped.row;
+            cols = [0, 1, 2, 3];
+            durations = paperdoll.timing.combatIdle;
+            includeTools = true;
+        } else if (moving) {
+            pageKey = 'p1';
+            row = 4 + mapped.row;
+            cols = [0, 1, 2, 3, 4, 5];
+            durations = paperdoll.timing.walk;
+        } else {
+            pageKey = 'p1';
+            row = mapped.row;
+            cols = [0];
+            durations = [99999];
+        }
+
+        const page = paperdoll.pages[pageKey];
+        if (!page || !page.base) return null;
+        const elapsed = attackAnimMs !== null && armed ? attackAnimMs : animTimeMs;
+        const index = this.resolveTimedFrameIndex(elapsed, durations);
+        const col = cols[index % cols.length];
+        const baseLayer = this.makePaperdollLayer(page.base, row, col, paperdoll.cell);
+        if (!baseLayer) return null;
+
+        const behindLayers = [];
+        const frontLayers = [];
+
+        if (includeTools) {
+            const weaponLayer = this.makePaperdollLayer(page.weapon, row, col, paperdoll.cell);
+            const shieldLayer = this.makePaperdollLayer(page.shield, row, col, paperdoll.cell);
+            const plan = this.resolveToolLayerPlan(pageKey, row, col);
+
+            // Keep sword above shield when both are on the same side.
+            const orderedTools = [];
+            if (shieldLayer) orderedTools.push({ kind: 'shield', layer: shieldLayer });
+            if (weaponLayer) orderedTools.push({ kind: 'weapon', layer: weaponLayer });
+
+            for (const t of orderedTools) {
+                const isFront = t.kind === 'weapon' ? plan.weaponFront : plan.shieldFront;
+                if (isFront) frontLayers.push(t.layer);
+                else behindLayers.push(t.layer);
+            }
+        }
+
+        const layers = [...behindLayers, baseLayer, ...frontLayers];
+        if (!layers.length) return null;
+        return {
+            className,
+            image: layers[0].image,
+            source: layers[0].source,
+            mirror: mapped.mirror,
+            head: null,
+            tint: null,
+            layers,
+            paperdoll: true,
+            includesTools: includeTools
+        };
+    }
+
+    resolveToolLayerPlan(pageKey, row, col) {
+        // Defaults are safest for readability in top-down/isometric combat:
+        // shield behind and weapon in front.
+        const fallback = { weaponFront: true, shieldFront: false };
+        const dirRow = ((row % 4) + 4) % 4;
+
+        if (pageKey === 'pONE2') {
+            const byRow = {
+                0: { weaponFront: true, shieldFront: true },   // south
+                1: { weaponFront: false, shieldFront: false }, // west
+                2: { weaponFront: true, shieldFront: false },  // east
+                3: { weaponFront: true, shieldFront: false }   // north
+            };
+            return byRow[dirRow] || fallback;
+        }
+
+        if (pageKey === 'pONE3') {
+            // Slash 1 (cols 0..3) based on included layer-order guides.
+            const weaponFront = {
+                0: [false, false, false, false],
+                1: [false, false, false, false],
+                2: [false, true, false, false],
+                3: [false, true, false, false]
+            };
+            const shieldFront = {
+                0: [true, false, false, false],
+                1: [false, false, true, false],
+                2: [false, false, false, false],
+                3: [false, false, false, false]
+            };
+            const c = Math.max(0, Math.min(3, col));
+            const wf = weaponFront[row]?.[c];
+            const sf = shieldFront[row]?.[c];
+            return {
+                weaponFront: typeof wf === 'boolean' ? wf : fallback.weaponFront,
+                shieldFront: typeof sf === 'boolean' ? sf : fallback.shieldFront
+            };
+        }
+
+        return fallback;
+    }
+
+    mapPaperdollFacing(facing) {
+        const map = {
+            // User mapping:
+            // p1 movement rows (bottom half): S, N, L(east), O(west)
+            // pONE1 combat rows (top half): S, N, L(east), O(west)
+            s: { row: 0, mirror: false },
+            n: { row: 1, mirror: false },
+            e: { row: 2, mirror: false },
+            w: { row: 3, mirror: false },
+            se: { row: 0, mirror: false },
+            sw: { row: 0, mirror: false },
+            ne: { row: 1, mirror: false },
+            nw: { row: 1, mirror: false }
+        };
+        return map[facing] || map.s;
+    }
+
+    resolveTimedFrameIndex(elapsedMs, durations) {
+        if (!Array.isArray(durations) || !durations.length) return 0;
+        const total = durations.reduce((sum, value) => sum + Math.max(1, value), 0);
+        let t = elapsedMs % total;
+        for (let i = 0; i < durations.length; i += 1) {
+            const d = Math.max(1, durations[i]);
+            if (t < d) return i;
+            t -= d;
+        }
+        return durations.length - 1;
+    }
+
+    makePaperdollLayer(image, row, col, cell) {
+        if (!image) return null;
+        return {
+            image,
+            source: {
+                x: col * cell,
+                y: row * cell,
+                w: cell,
+                h: cell
+            }
+        };
     }
 }
