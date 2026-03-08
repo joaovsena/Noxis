@@ -43,9 +43,16 @@ export interface PlayerRuntime {
         x: number;
         y: number;
     }>;
+    rawMovePath?: Array<{
+        x: number;
+        y: number;
+    }>;
     nextPathfindAt?: number;
     pathDestinationX?: number;
     pathDestinationY?: number;
+    lastMoveCheckX?: number;
+    lastMoveCheckY?: number;
+    lastMoveProgressAt?: number;
 }
 export interface Mob {
     id: string;

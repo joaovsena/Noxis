@@ -135,6 +135,7 @@ export declare class GameController {
     private arePlayersInSameParty;
     private assignPathTo;
     private findPathWithNearbyGoals;
+    private smoothWorldPath;
     private recalculatePathToward;
     private worldToPathCell;
     private pathCellToWorld;

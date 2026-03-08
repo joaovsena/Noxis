@@ -104,9 +104,15 @@ const MOB_ATTACK_WINDUP_MS = 220;
 const MOB_LEASH_REGEN_PER_SEC = 0.10;
 const PARTY_WAYPOINT_TTL_MS = 10000;
 const PATHFIND_CELL_SIZE = 12;
-const PATHFIND_MAX_ITERS = 220000;
+const PATHFIND_MAX_ITERS = 45000;
 const PATH_RECALC_MS = 280;
 const PATH_PROBE_RADIUS = Math.max(8, PLAYER_HALF_SIZE - 6);
+const PATH_STUCK_REPATH_MS = 260;
+const PATH_STUCK_TIMEOUT_MS = 450;
+const PATH_NEARBY_GOAL_MAX_CANDIDATES = 72;
+const PATH_NEARBY_GOAL_MAX_RADIUS = 42;
+const PROJECT_TO_WALKABLE_MAX_RADIUS = 420;
+const PROJECT_TO_WALKABLE_ANGLE_STEPS = 64;
 const ATTRIBUTE_DRIVEN_OVERRIDE_KEYS = [
     'physicalAttack',
     'magicAttack',
@@ -118,7 +124,7 @@ const ATTRIBUTE_DRIVEN_OVERRIDE_KEYS = [
     'luck',
     'maxHp'
 ];
-const PATH_PLAN_RADIUS = PATH_PROBE_RADIUS + 1;
+const PATH_PLAN_RADIUS = Math.max(6, PATH_PROBE_RADIUS - 4);
 const MOVE_COLLISION_PADDING = 4;
 
 type SkillDef = {
@@ -563,9 +569,13 @@ export class GameController {
             skillLevels: this.normalizeSkillLevels(profile?.statusOverrides?.__skillLevels || {}),
             activeSkillEffects: [],
             movePath: [],
+            rawMovePath: [],
             nextPathfindAt: 0,
             pathDestinationX: spawn.x,
-            pathDestinationY: spawn.y
+            pathDestinationY: spawn.y,
+            lastMoveCheckX: spawn.x,
+            lastMoveCheckY: spawn.y,
+            lastMoveProgressAt: Date.now()
         };
         this.recomputePlayerStats(runtime);
         return runtime;
@@ -579,18 +589,18 @@ export class GameController {
         player.attackTargetId = null;
         player.pvpAutoAttackActive = false;
         player.attackTargetPlayerId = null;
-        const projected = this.projectToWalkable(
-            player.mapKey,
-            clamp(Number.isFinite(incomingX) ? incomingX : player.x, 0, WORLD.width),
-            clamp(Number.isFinite(incomingY) ? incomingY : player.y, 0, WORLD.height)
-        );
-        this.assignPathTo(player, projected.x, projected.y);
+        const destinationX = clamp(Number.isFinite(incomingX) ? incomingX : player.x, 0, WORLD.width);
+        const destinationY = clamp(Number.isFinite(incomingY) ? incomingY : player.y, 0, WORLD.height);
+        this.assignPathTo(player, destinationX, destinationY);
         player.ws.send(JSON.stringify({
             type: 'move_ack',
             reqId: msg.reqId,
             targetX: player.targetX,
             targetY: player.targetY,
-            pathNodes: Array.isArray(player.movePath) ? player.movePath : []
+            projectedX: player.pathDestinationX,
+            projectedY: player.pathDestinationY,
+            pathNodes: Array.isArray(player.movePath) ? player.movePath : [],
+            pathNodesRaw: Array.isArray(player.rawMovePath) ? player.rawMovePath : []
         }));
     }
 
@@ -602,6 +612,7 @@ export class GameController {
             player.autoAttackActive = false;
             player.attackTargetId = null;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             return;
@@ -663,6 +674,7 @@ export class GameController {
         player.targetX = player.x;
         player.targetY = player.y;
         player.movePath = [];
+        player.rawMovePath = [];
         player.pathDestinationX = player.x;
         player.pathDestinationY = player.y;
         player.attackTargetId = null;
@@ -978,6 +990,7 @@ export class GameController {
             target.targetX = target.x;
             target.targetY = target.y;
             target.movePath = [];
+            target.rawMovePath = [];
             target.pathDestinationX = target.x;
             target.pathDestinationY = target.y;
             target.attackTargetId = null;
@@ -1013,6 +1026,7 @@ export class GameController {
             player.targetX = player.x;
             player.targetY = player.y;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             player.attackTargetId = null;
@@ -1047,6 +1061,7 @@ export class GameController {
             target.targetX = target.x;
             target.targetY = target.y;
             target.movePath = [];
+            target.rawMovePath = [];
             target.pathDestinationX = target.x;
             target.pathDestinationY = target.y;
             target.attackTargetId = null;
@@ -1703,6 +1718,7 @@ export class GameController {
         player.pvpAutoAttackActive = false;
         player.attackTargetPlayerId = null;
         player.movePath = [];
+        player.rawMovePath = [];
         player.pathDestinationX = player.x;
         player.pathDestinationY = player.y;
     }
@@ -1731,6 +1747,7 @@ export class GameController {
         player.targetX = player.x;
         player.targetY = player.y;
         player.movePath = [];
+        player.rawMovePath = [];
         player.pathDestinationX = player.x;
         player.pathDestinationY = player.y;
         player.autoAttackActive = false;
@@ -2041,6 +2058,7 @@ export class GameController {
 
     buildWorldSnapshot(mapId: string = DEFAULT_MAP_ID, mapKey: string = DEFAULT_MAP_KEY) {
         const mapInstanceId = this.mapInstanceId(mapKey, mapId);
+        const hasTiledCollision = Boolean(this.getMapTiledCollisionSampler(mapKey));
         const publicPlayers: Record<string, any> = {};
         for (const [id, player] of this.players.entries()) {
             if (player.mapId !== mapId || player.mapKey !== mapKey) continue;
@@ -2054,7 +2072,7 @@ export class GameController {
             mapCode: mapCodeFromKey(mapKey),
             mapKey,
             mapTheme: MAP_THEMES[mapKey] || 'forest',
-            mapFeatures: MAP_FEATURES_BY_KEY[mapKey] || [],
+            mapFeatures: hasTiledCollision ? [] : (MAP_FEATURES_BY_KEY[mapKey] || []),
             portals: PORTALS_BY_MAP_KEY[mapKey] || [],
             mapId,
             world: WORLD
@@ -2112,6 +2130,7 @@ export class GameController {
             maxHp: player.maxHp,
             equippedWeaponName: weapon ? weapon.name : null,
             pathNodes: Array.isArray(player.movePath) ? player.movePath.slice(0, 40).map((pt: any) => ({ x: Number(pt.x), y: Number(pt.y) })) : [],
+            pathNodesRaw: Array.isArray(player.rawMovePath) ? player.rawMovePath.slice(0, 80).map((pt: any) => ({ x: Number(pt.x), y: Number(pt.y) })) : [],
             xp: player.xp,
             xpToNext: xpRequired(player.level),
             stats: player.stats,
@@ -2171,6 +2190,19 @@ export class GameController {
     }
 
     private movePlayerTowardTarget(player: PlayerRuntime, deltaSeconds: number, now: number) {
+        if (!Number.isFinite(Number(player.lastMoveProgressAt))) player.lastMoveProgressAt = now;
+        if (!Number.isFinite(Number(player.lastMoveCheckX))) player.lastMoveCheckX = player.x;
+        if (!Number.isFinite(Number(player.lastMoveCheckY))) player.lastMoveCheckY = player.y;
+        const movedSinceCheck = Math.hypot(
+            Number(player.x) - Number(player.lastMoveCheckX),
+            Number(player.y) - Number(player.lastMoveCheckY)
+        );
+        if (movedSinceCheck >= 1.2) {
+            player.lastMoveCheckX = player.x;
+            player.lastMoveCheckY = player.y;
+            player.lastMoveProgressAt = now;
+        }
+
         if (Array.isArray(player.movePath) && player.movePath.length > 0) {
             const next = player.movePath[0];
             if (next) {
@@ -2197,6 +2229,7 @@ export class GameController {
                     player.targetY = player.y;
                     player.pathDestinationX = player.x;
                     player.pathDestinationY = player.y;
+                    player.rawMovePath = [];
                 }
             }
             return;
@@ -2219,6 +2252,7 @@ export class GameController {
                     player.targetY = player.y;
                     player.pathDestinationX = player.x;
                     player.pathDestinationY = player.y;
+                    player.rawMovePath = [];
                 }
             }
             return;
@@ -2253,12 +2287,23 @@ export class GameController {
         }
         const destinationX = Number.isFinite(Number(player.pathDestinationX)) ? Number(player.pathDestinationX) : player.targetX;
         const destinationY = Number.isFinite(Number(player.pathDestinationY)) ? Number(player.pathDestinationY) : player.targetY;
-        this.recalculatePathToward(player, destinationX, destinationY, now);
+        const stuckForMs = now - Number(player.lastMoveProgressAt || now);
+        if (stuckForMs >= PATH_STUCK_REPATH_MS) {
+            this.recalculatePathToward(player, destinationX, destinationY, now);
+        }
+        if (stuckForMs >= PATH_STUCK_TIMEOUT_MS) {
+            const fallback = this.projectToWalkable(player.mapKey, destinationX, destinationY);
+            this.assignPathTo(player, fallback.x, fallback.y);
+            player.lastMoveProgressAt = now;
+            player.lastMoveCheckX = player.x;
+            player.lastMoveCheckY = player.y;
+        }
         if (!Array.isArray(player.movePath) || player.movePath.length === 0) {
             player.targetX = player.x;
             player.targetY = player.y;
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
+            player.rawMovePath = [];
         }
     }
 
@@ -2270,6 +2315,7 @@ export class GameController {
             player.autoAttackActive = false;
             player.attackTargetId = null;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             return;
@@ -2295,6 +2341,7 @@ export class GameController {
         }
 
         player.movePath = [];
+        player.rawMovePath = [];
         player.targetX = player.x;
         player.targetY = player.y;
         player.pathDestinationX = player.x;
@@ -2557,6 +2604,7 @@ export class GameController {
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             return;
@@ -2565,6 +2613,7 @@ export class GameController {
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             return;
@@ -2574,6 +2623,7 @@ export class GameController {
             player.pvpAutoAttackActive = false;
             player.attackTargetPlayerId = null;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             return;
@@ -2596,6 +2646,7 @@ export class GameController {
             return;
         }
         player.movePath = [];
+        player.rawMovePath = [];
         player.targetX = player.x;
         player.targetY = player.y;
         player.pathDestinationX = player.x;
@@ -2928,11 +2979,12 @@ export class GameController {
         const projected = this.projectToWalkable(player.mapKey, destinationX, destinationY);
         player.pathDestinationX = projected.x;
         player.pathDestinationY = projected.y;
-        const path = this.findPathWithNearbyGoals(player.mapKey, player.x, player.y, projected.x, projected.y);
-        player.movePath = path;
-        if (path.length > 0) {
-            player.targetX = path[0].x;
-            player.targetY = path[0].y;
+        const rawPath = this.findPathWithNearbyGoals(player.mapKey, player.x, player.y, projected.x, projected.y);
+        player.rawMovePath = rawPath;
+        player.movePath = this.smoothWorldPath(player.mapKey, player.x, player.y, rawPath);
+        if (player.movePath.length > 0) {
+            player.targetX = player.movePath[0].x;
+            player.targetY = player.movePath[0].y;
             return;
         }
         if (!this.isPathSegmentBlocked(player.mapKey, player.x, player.y, projected.x, projected.y)) {
@@ -2940,6 +2992,7 @@ export class GameController {
             player.targetY = projected.y;
             return;
         }
+        player.rawMovePath = [];
         player.targetX = player.x;
         player.targetY = player.y;
     }
@@ -2950,8 +3003,8 @@ export class GameController {
 
         const goal = this.worldToPathCell(toX, toY);
         let candidatesChecked = 0;
-        const maxCandidates = 220;
-        const maxRadius = 120;
+        const maxCandidates = PATH_NEARBY_GOAL_MAX_CANDIDATES;
+        const maxRadius = PATH_NEARBY_GOAL_MAX_RADIUS;
         for (let r = 1; r <= maxRadius && candidatesChecked < maxCandidates; r++) {
             for (let dx = -r; dx <= r && candidatesChecked < maxCandidates; dx++) {
                 const checks = [
@@ -2983,6 +3036,35 @@ export class GameController {
             }
         }
         return [];
+    }
+
+    private smoothWorldPath(mapKey: string, startX: number, startY: number, points: Array<{ x: number; y: number }>) {
+        if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points : [];
+        const path = points
+            .map((pt) => ({ x: Number(pt?.x), y: Number(pt?.y) }))
+            .filter((pt) => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+        if (path.length <= 2) return path;
+
+        const smoothed: Array<{ x: number; y: number }> = [];
+        let anchor = { x: Number(startX), y: Number(startY) };
+        let index = 0;
+
+        while (index < path.length) {
+            let best = index;
+            for (let probe = path.length - 1; probe >= index; probe--) {
+                const node = path[probe];
+                if (!this.isPathSegmentBlocked(mapKey, anchor.x, anchor.y, node.x, node.y)) {
+                    best = probe;
+                    break;
+                }
+            }
+            const picked = path[best];
+            smoothed.push(picked);
+            anchor = picked;
+            index = best + 1;
+        }
+
+        return smoothed;
     }
 
     private recalculatePathToward(player: PlayerRuntime, destinationX: number, destinationY: number, now: number) {
@@ -3038,6 +3120,15 @@ export class GameController {
         const sameCell = start.cx === goal.cx && start.cy === goal.cy;
         if (sameCell) return [{ x: clamp(toX, 0, WORLD.width), y: clamp(toY, 0, WORLD.height) }];
 
+        const walkableMemo = new Map<string, boolean>();
+        const isWalkable = (cx: number, cy: number) => {
+            const key = `${cx},${cy}`;
+            if (walkableMemo.has(key)) return Boolean(walkableMemo.get(key));
+            const ok = this.isPathCellWalkable(mapKey, cx, cy);
+            walkableMemo.set(key, ok);
+            return ok;
+        };
+
         const startKey = `${start.cx},${start.cy}`;
         const goalKey = `${goal.cx},${goal.cy}`;
         const open = new Set<string>([startKey]);
@@ -3084,9 +3175,11 @@ export class GameController {
                 const ny = cy + dir.y;
                 const nkey = `${nx},${ny}`;
                 if (closed.has(nkey)) continue;
-                if (!this.isPathCellWalkable(mapKey, nx, ny)) continue;
+                if (!isWalkable(nx, ny)) continue;
                 if (dir.x !== 0 && dir.y !== 0) {
-                    if (!this.isPathCellWalkable(mapKey, cx + dir.x, cy) || !this.isPathCellWalkable(mapKey, cx, cy + dir.y)) {
+                    const from = this.pathCellToWorld(cx, cy);
+                    const to = this.pathCellToWorld(nx, ny);
+                    if (this.isPathSegmentBlocked(mapKey, from.x, from.y, to.x, to.y)) {
                         continue;
                     }
                 }
@@ -3106,7 +3199,7 @@ export class GameController {
         const py = clamp(y, 0, WORLD.height);
         const radius = Number.isFinite(Number(radiusOverride)) ? Number(radiusOverride) : PATH_PROBE_RADIUS;
         const tiledSampler = this.getMapTiledCollisionSampler(mapKey);
-        if (tiledSampler && tiledSampler.isBlockedAt(px, py, radius)) return true;
+        if (tiledSampler) return tiledSampler.isBlockedAt(px, py, radius);
         const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         for (const feature of features) {
             if (!feature.collision) continue;
@@ -3203,6 +3296,7 @@ export class GameController {
             player.targetX = player.x;
             player.targetY = player.y;
             player.movePath = [];
+            player.rawMovePath = [];
             player.pathDestinationX = player.x;
             player.pathDestinationY = player.y;
             player.attackTargetId = null;
@@ -3223,7 +3317,7 @@ export class GameController {
         const py = clamp(y, 0, WORLD.height);
         const radius = Math.max(8, PLAYER_HALF_SIZE - 6) + MOVE_COLLISION_PADDING;
         const tiledSampler = this.getMapTiledCollisionSampler(mapKey);
-        if (tiledSampler && tiledSampler.isBlockedAt(px, py, radius)) return true;
+        if (tiledSampler) return tiledSampler.isBlockedAt(px, py, radius);
         const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         for (const feature of features) {
             if (!feature.collision) continue;
@@ -3249,10 +3343,16 @@ export class GameController {
         const px = clamp(x, 0, WORLD.width);
         const py = clamp(y, 0, WORLD.height);
         if (!this.isBlockedAt(mapKey, px, py)) return { x: px, y: py };
-        const maxRadius = Math.max(WORLD.width, WORLD.height);
-        for (let radius = 16; radius <= maxRadius; radius += 16) {
-            for (let i = 0; i < 64; i++) {
-                const angle = (Math.PI * 2 * i) / 64;
+        const goalCell = this.worldToPathCell(px, py);
+        const nearestGoalCell = this.findNearestWalkableCell(mapKey, goalCell.cx, goalCell.cy, 96);
+        if (nearestGoalCell) {
+            const snapped = this.pathCellToWorld(nearestGoalCell.cx, nearestGoalCell.cy);
+            if (!this.isBlockedAt(mapKey, snapped.x, snapped.y)) return snapped;
+        }
+        // Fallback limitado para evitar travar o tick quando o clique cai em regiao muito bloqueada.
+        for (let radius = 8; radius <= PROJECT_TO_WALKABLE_MAX_RADIUS; radius += 8) {
+            for (let i = 0; i < PROJECT_TO_WALKABLE_ANGLE_STEPS; i++) {
+                const angle = (Math.PI * 2 * i) / PROJECT_TO_WALKABLE_ANGLE_STEPS;
                 const nx = clamp(px + Math.cos(angle) * radius, 0, WORLD.width);
                 const ny = clamp(py + Math.sin(angle) * radius, 0, WORLD.height);
                 if (!this.isBlockedAt(mapKey, nx, ny)) return { x: nx, y: ny };

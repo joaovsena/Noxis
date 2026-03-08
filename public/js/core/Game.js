@@ -269,6 +269,9 @@ export class Game {
         this.perfHudLastPaintAt = 0;
         this.perfHudPaintIntervalMs = 250;
         this.perfHudDirty = true;
+        this.maxFps = 60;
+        this.frameIntervalMs = 1000 / this.maxFps;
+        this.lastRenderAt = 0;
         this.loadTiledMapLayout('A1');
         this.ensureForestMap();
         this.setPartyTab('area');
@@ -978,7 +981,7 @@ export class Game {
         const clampedY = Math.max(0, Math.min(this.mapHeight, y));
         this.cancelPendingPickup();
         this.network.send({ type: 'move', reqId, x: clampedX, y: clampedY });
-        this.lastMoveSent = { reqId, x: clampedX, y: clampedY, at: Date.now() };
+        this.lastMoveSent = { reqId, x: clampedX, y: clampedY, projectedX: clampedX, projectedY: clampedY, at: Date.now() };
     }
 
     /**
@@ -1065,6 +1068,7 @@ export class Game {
         this.fpsWindowStartAt = 0;
         this.fpsFrameCount = 0;
         this.fpsValue = 0;
+        this.lastRenderAt = 0;
         this.perfHudDirty = true;
         this.refreshPerformanceHud(true);
 
@@ -1135,6 +1139,7 @@ export class Game {
         this.fpsWindowStartAt = 0;
         this.fpsFrameCount = 0;
         this.fpsValue = 0;
+        this.lastRenderAt = 0;
         this.perfHudDirty = true;
         this.playerCard.classList.add('hidden');
         this.minimapWrap.classList.add('hidden');
@@ -1180,8 +1185,13 @@ export class Game {
      */
     onMoveAck(message) {
         this.lastMoveAck = message;
+        if (this.lastMoveSent && String(this.lastMoveSent.reqId || '') === String(message.reqId || '')) {
+            if (Number.isFinite(Number(message.projectedX))) this.lastMoveSent.projectedX = Number(message.projectedX);
+            if (Number.isFinite(Number(message.projectedY))) this.lastMoveSent.projectedY = Number(message.projectedY);
+        }
         if (!this.localId || !this.players[this.localId]) return;
         this.players[this.localId].pathNodes = Array.isArray(message.pathNodes) ? message.pathNodes : [];
+        this.players[this.localId].pathNodesRaw = Array.isArray(message.pathNodesRaw) ? message.pathNodesRaw : [];
     }
 
     /**
@@ -1685,7 +1695,7 @@ export class Game {
         }
         const reqId = `m-${++this.moveReqCounter}-${Date.now()}`;
         this.network.send({ type: 'move', reqId, x: Number(item.x), y: Number(item.y) });
-        this.lastMoveSent = { reqId, x: Number(item.x), y: Number(item.y), at: Date.now() };
+        this.lastMoveSent = { reqId, x: Number(item.x), y: Number(item.y), projectedX: Number(item.x), projectedY: Number(item.y), at: Date.now() };
         this.pendingPickup.lastMoveAt = now;
     }
 
@@ -1716,7 +1726,7 @@ export class Game {
         if (now - Number(this.pendingPickup.lastMoveAt || 0) < 350) return;
         const reqId = `m-${++this.moveReqCounter}-${now}`;
         this.network.send({ type: 'move', reqId, x: Number(pendingItem.x), y: Number(pendingItem.y) });
-        this.lastMoveSent = { reqId, x: Number(pendingItem.x), y: Number(pendingItem.y), at: now };
+        this.lastMoveSent = { reqId, x: Number(pendingItem.x), y: Number(pendingItem.y), projectedX: Number(pendingItem.x), projectedY: Number(pendingItem.y), at: now };
         this.pendingPickup.lastMoveAt = now;
     }
 
@@ -2775,6 +2785,7 @@ export class Game {
             hitAnim: null,
             attackAnim: null,
             pathNodes: Array.isArray(player.pathNodes) ? player.pathNodes : [],
+            pathNodesRaw: Array.isArray(player.pathNodesRaw) ? player.pathNodesRaw : [],
             facing: 's',
             animMs: 0,
             animLastAt: Date.now(),
@@ -2817,6 +2828,9 @@ export class Game {
         if (message.mapKey) this.currentMapKey = message.mapKey;
         if (message.mapTheme) this.currentMapTheme = message.mapTheme;
         this.mapFeatures = Array.isArray(message.mapFeatures) ? message.mapFeatures : [];
+        if (this.currentMapCode === 'A1' && this.hasTiledLayout('A1')) {
+            this.mapFeatures = [];
+        }
         this.mapPortals = Array.isArray(message.portals) ? message.portals : [];
         if (this.currentMapCode) this.loadTiledMapLayout(this.currentMapCode);
         this.ensureForestMap();
@@ -3045,6 +3059,7 @@ export class Game {
             p.allocatedStats = this.normalizeAllocatedStats(incoming.allocatedStats);
             p.unspentPoints = Number.isFinite(Number(incoming.unspentPoints)) ? Math.max(0, Number(incoming.unspentPoints)) : 0;
             p.pathNodes = Array.isArray(incoming.pathNodes) ? incoming.pathNodes : [];
+            p.pathNodesRaw = Array.isArray(incoming.pathNodesRaw) ? incoming.pathNodesRaw : [];
             p.targetX = incoming.x;
             p.targetY = incoming.y;
 
@@ -3300,9 +3315,11 @@ export class Game {
     /**
      * Interpola movimento de entidades para renderização suave.
      */
-    smoothEntities() {
-        const lerp = 0.2;
-        const snap = 0.4;
+    smoothEntities(deltaMs = 16.67) {
+        const dt = Math.max(1, Number(deltaMs || 16.67));
+        const alpha = 1 - Math.exp(-18 * (dt / 1000));
+        const lerp = Math.max(0.2, Math.min(0.7, alpha));
+        const snap = Math.max(0.8, dt * 0.05);
 
         for (const id of Object.keys(this.players)) {
             const p = this.players[id];
@@ -3993,32 +4010,42 @@ export class Game {
         if (!this.localId || !this.players[this.localId]) return;
         const me = this.players[this.localId];
 
-        for (const feature of this.mapFeatures || []) {
-            if (!feature || !feature.collision) continue;
-            ctx.strokeStyle = 'rgba(255, 70, 70, 0.95)';
-            ctx.lineWidth = 1;
-            if (feature.shape === 'rect') {
-                const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
-                const x = (projected.x - worldRect.x) * sx;
-                const y = (projected.y - worldRect.y) * sy;
-                const w = Number(feature.w) * sx;
-                const h = Number(feature.h) * sy;
-                ctx.strokeRect(x, y, w, h);
-            } else if (feature.shape === 'circle') {
-                const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
-                ctx.beginPath();
-                ctx.arc(
-                    (projected.x - worldRect.x) * sx,
-                    (projected.y - worldRect.y) * sy,
-                    Number(feature.r) * Math.min(sx, sy),
-                    0,
-                    Math.PI * 2
-                );
-                ctx.stroke();
+        if (!(this.currentMapCode === 'A1' && this.hasTiledLayout('A1'))) {
+            for (const feature of this.mapFeatures || []) {
+                if (!feature || !feature.collision) continue;
+                ctx.strokeStyle = 'rgba(255, 70, 70, 0.95)';
+                ctx.lineWidth = 1;
+                if (feature.shape === 'rect') {
+                    const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
+                    const x = (projected.x - worldRect.x) * sx;
+                    const y = (projected.y - worldRect.y) * sy;
+                    const w = Number(feature.w) * sx;
+                    const h = Number(feature.h) * sy;
+                    ctx.strokeRect(x, y, w, h);
+                } else if (feature.shape === 'circle') {
+                    const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
+                    ctx.beginPath();
+                    ctx.arc(
+                        (projected.x - worldRect.x) * sx,
+                        (projected.y - worldRect.y) * sy,
+                        Number(feature.r) * Math.min(sx, sy),
+                        0,
+                        Math.PI * 2
+                    );
+                    ctx.stroke();
+                }
             }
         }
 
         const nodes = Array.isArray(me.pathNodes) ? me.pathNodes : [];
+        const rawNodes = Array.isArray(me.pathNodesRaw) ? me.pathNodesRaw : [];
+        if (rawNodes.length) {
+            const rawPoints = [{ x: me.x, y: me.y }, ...rawNodes];
+            this.drawPolyline(ctx, rawPoints, 'rgba(120, 210, 255, 0.55)', 1, (point) => ({
+                x: (this.worldToRenderCoords(point.x, point.y).x - worldRect.x) * sx,
+                y: (this.worldToRenderCoords(point.x, point.y).y - worldRect.y) * sy
+            }));
+        }
         if (nodes.length) {
             const points = [{ x: me.x, y: me.y }, ...nodes];
             this.drawPolyline(ctx, points, 'rgba(255, 90, 220, 0.95)', 1.5, (point) => ({
@@ -4034,12 +4061,19 @@ export class Game {
             ctx.strokeStyle = 'rgba(80, 220, 255, 0.95)';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(mx - 4, my - 4, 8, 8);
+            if (Number.isFinite(Number(this.lastMoveSent.projectedX)) && Number.isFinite(Number(this.lastMoveSent.projectedY))) {
+                const projectedGoal = this.worldToRenderCoords(this.lastMoveSent.projectedX, this.lastMoveSent.projectedY);
+                const gx = (projectedGoal.x - worldRect.x) * sx;
+                const gy = (projectedGoal.y - worldRect.y) * sy;
+                ctx.strokeStyle = 'rgba(255, 255, 120, 0.95)';
+                ctx.strokeRect(gx - 3, gy - 3, 6, 6);
+            }
         }
 
         ctx.fillStyle = '#ffd36f';
         ctx.font = '10px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(`NODES: ${nodes.length}`, 6, 12);
+        ctx.fillText(`NODES: ${nodes.length} | RAW: ${rawNodes.length}`, 6, 12);
     }
 
     /**
@@ -4952,7 +4986,14 @@ export class Game {
      */
     startLoop() {
         const loop = (now) => {
-            this.draw(Number(now || performance.now()));
+            const ts = Number(now || performance.now());
+            if (!this.lastRenderAt) this.lastRenderAt = ts;
+            const elapsed = ts - this.lastRenderAt;
+            if (elapsed >= this.frameIntervalMs) {
+                const deltaMs = Math.max(1, Math.min(120, elapsed));
+                this.lastRenderAt = ts - (elapsed % this.frameIntervalMs);
+                this.draw(ts, deltaMs);
+            }
             requestAnimationFrame(loop);
         };
         requestAnimationFrame(loop);
@@ -5745,6 +5786,14 @@ export class Game {
 
         // Rota planejada recebida do servidor.
         const nodes = Array.isArray(me.pathNodes) ? me.pathNodes : [];
+        const rawNodes = Array.isArray(me.pathNodesRaw) ? me.pathNodesRaw : [];
+        if (rawNodes.length) {
+            const rawPoints = [{ x: me.x, y: me.y }, ...rawNodes];
+            this.drawPolyline(this.ctx, rawPoints, 'rgba(120, 210, 255, 0.55)', 1.5, (pt) => ({
+                x: this.worldToRenderCoords(pt.x, pt.y).x - this.camera.x,
+                y: this.worldToRenderCoords(pt.x, pt.y).y - this.camera.y
+            }));
+        }
         if (nodes.length) {
             const points = [{ x: me.x, y: me.y }, ...nodes];
             this.drawPolyline(this.ctx, points, 'rgba(255, 90, 220, 0.95)', 3, (pt) => ({
@@ -5764,12 +5813,22 @@ export class Game {
                 12,
                 12
             );
+            if (Number.isFinite(Number(this.lastMoveSent.projectedX)) && Number.isFinite(Number(this.lastMoveSent.projectedY))) {
+                const projectedGoal = this.worldToRenderCoords(this.lastMoveSent.projectedX, this.lastMoveSent.projectedY);
+                this.ctx.strokeStyle = 'rgba(255, 255, 120, 0.95)';
+                this.ctx.strokeRect(
+                    projectedGoal.x - this.camera.x - 5,
+                    projectedGoal.y - this.camera.y - 5,
+                    10,
+                    10
+                );
+            }
         }
 
         this.ctx.fillStyle = '#ffd36f';
         this.ctx.font = '12px monospace';
         this.ctx.textAlign = 'center';
-        this.ctx.fillText(`DEBUG PATH ON | NODES: ${nodes.length}`, this.canvas.width * 0.5, 18);
+        this.ctx.fillText(`DEBUG PATH ON | NODES: ${nodes.length} | RAW: ${rawNodes.length}`, this.canvas.width * 0.5, 18);
         this.ctx.restore();
     }
 
@@ -5805,10 +5864,10 @@ export class Game {
     /**
      * Render principal de cada frame.
      */
-    draw(now = performance.now()) {
+    draw(now = performance.now(), deltaMs = 16.67) {
         this.updatePerformanceMetrics(now);
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.smoothEntities();
+        this.smoothEntities(deltaMs);
         this.processPendingPickup();
 
         if (this.localId && this.players[this.localId]) {

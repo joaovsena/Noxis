@@ -46,8 +46,6 @@ function buildSampler(): CollisionSampler | null {
 
     const mapWidth = Math.max(1, Math.floor(Number(parsedMap.width || 0)));
     const mapHeight = Math.max(1, Math.floor(Number(parsedMap.height || 0)));
-    const tileWidth = Math.max(1, Number(parsedMap.tilewidth || 0));
-    const tileHeight = Math.max(1, Number(parsedMap.tileheight || 0));
 
     const tilesets = Array.isArray(parsedMap.tilesets) ? parsedMap.tilesets : [];
     const tilesetCollision = buildTilesetCollisionByFirstGid(tilesets);
@@ -76,21 +74,21 @@ function buildSampler(): CollisionSampler | null {
         }
     }
 
-    const mapPixelWidth = mapWidth * tileWidth;
-    const mapPixelHeight = mapHeight * tileHeight;
-    const scaleX = mapPixelWidth / Math.max(1, WORLD.width);
-    const scaleY = mapPixelHeight / Math.max(1, WORLD.height);
+    const cellsX = Math.max(1, mapWidth - 1);
+    const cellsY = Math.max(1, mapHeight - 1);
+    const worldPerCellX = WORLD.width / cellsX;
+    const worldPerCellY = WORLD.height / cellsY;
 
     return {
         isBlockedAt(worldX: number, worldY: number, radiusWorld: number) {
-            const px = clamp(worldX, 0, WORLD.width) * scaleX;
-            const py = clamp(worldY, 0, WORLD.height) * scaleY;
-            const cx = clamp(Math.floor(px / tileWidth), 0, mapWidth - 1);
-            const cy = clamp(Math.floor(py / tileHeight), 0, mapHeight - 1);
-            const radiusPxX = Math.max(0, Number(radiusWorld || 0)) * scaleX;
-            const radiusPxY = Math.max(0, Number(radiusWorld || 0)) * scaleY;
-            const rx = Math.max(0, Math.ceil(radiusPxX / tileWidth));
-            const ry = Math.max(0, Math.ceil(radiusPxY / tileHeight));
+            const wx = clamp(worldX, 0, WORLD.width);
+            const wy = clamp(worldY, 0, WORLD.height);
+            // Servidor trabalha em coordenada "de mundo" normalizada; convertemos para grade do mapa TMJ.
+            const cx = clamp(Math.round((wx / Math.max(1, WORLD.width)) * cellsX), 0, mapWidth - 1);
+            const cy = clamp(Math.round((wy / Math.max(1, WORLD.height)) * cellsY), 0, mapHeight - 1);
+            const radius = Math.max(0, Number(radiusWorld || 0));
+            const rx = Math.max(0, Math.ceil(radius / Math.max(1, worldPerCellX)));
+            const ry = Math.max(0, Math.ceil(radius / Math.max(1, worldPerCellY)));
 
             for (let y = cy - ry; y <= cy + ry; y += 1) {
                 if (y < 0 || y >= mapHeight) continue;
