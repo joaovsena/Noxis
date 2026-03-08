@@ -12,7 +12,10 @@ type OnHitSkillFn = (player: PlayerRuntime, dealtDamage: number, now: number) =>
 type SendStatsFn = (player: PlayerRuntime) => void;
 type PersistPlayerFn = (player: PlayerRuntime) => void;
 type SyncPartyFn = () => void;
-type GrantXpFn = (player: PlayerRuntime, amount: number) => void;
+type GrantXpFn = (player: PlayerRuntime, amount: number, context?: {
+    mapKey?: string;
+    mapId?: string;
+}) => void;
 type MapInstanceIdFn = (mapKey: string, mapId: string) => string;
 type DropPosFn = (originX: number, originY: number, dropIndex: number, dropTotal: number, mapKey: string) => {
     x: number;

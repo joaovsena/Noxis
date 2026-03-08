@@ -87,7 +87,7 @@ export declare const MOB_VARIANTS: {
         color: string;
     };
 };
-export declare const ITEM_PICKUP_RANGE = 90;
+export declare const ITEM_PICKUP_RANGE = 110;
 export declare const GROUND_ITEM_TTL_MS = 60000;
 export declare const COMBAT_LOCK_MS = 10000;
 export declare const PARTY_MAX_MEMBERS = 5;

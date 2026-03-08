@@ -50,7 +50,7 @@ class CombatCoreService {
         mob.hp = Math.max(0, Number(mob.hp || 0) - finalDamage);
         if (mob.hp > 0)
             return true;
-        this.grantXp(player, mob.xpReward);
+        this.grantXp(player, mob.xpReward, { mapKey: player.mapKey, mapId: player.mapId });
         const mapInstanceId = this.mapInstanceId(player.mapKey, player.mapId);
         const dropDefs = [];
         if (Math.random() < 0.5)

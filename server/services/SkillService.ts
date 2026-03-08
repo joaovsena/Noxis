@@ -36,6 +36,7 @@ type SendStatsUpdatedFn = (player: PlayerRuntime) => void;
 type MapInstanceIdFn = (mapKey: string, mapId: string) => string;
 type GetMobsFn = () => any[];
 type GetMobsByMapFn = (mapId: string) => any[];
+type AssignPathToFn = (player: PlayerRuntime, destinationX: number, destinationY: number) => void;
 type GetSkillPrerequisiteFn = (skillId: string) => string | null;
 type NormalizeSkillLevelsFn = (input: any) => Record<string, number>;
 type GetAvailableSkillPointsFn = (player: PlayerRuntime) => number;
@@ -43,6 +44,8 @@ type RecomputePlayerStatsFn = (player: PlayerRuntime) => void;
 type PersistPlayerFn = (player: PlayerRuntime) => void;
 
 export class SkillService {
+    private readonly mobDotTokens = new Map<string, number>();
+
     constructor(
         private readonly skillDefs: Record<string, SkillDef>,
         private readonly sendRaw: SendRawFn,
@@ -62,6 +65,7 @@ export class SkillService {
         private readonly mapInstanceId: MapInstanceIdFn,
         private readonly getMobs: GetMobsFn,
         private readonly getMobsByMap: GetMobsByMapFn,
+        private readonly assignPathTo: AssignPathToFn,
         private readonly getSkillPrerequisite: GetSkillPrerequisiteFn,
         private readonly normalizeSkillLevels: NormalizeSkillLevelsFn,
         private readonly getAvailableSkillPoints: GetAvailableSkillPointsFn,
@@ -69,14 +73,34 @@ export class SkillService {
         private readonly persistPlayer: PersistPlayerFn
     ) {}
 
+    processPendingSkillCast(player: PlayerRuntime, now: number) {
+        const pending = player.pendingSkillCast;
+        if (!pending || typeof pending !== 'object') return;
+        const issuedAt = Number(pending.issuedAt || 0);
+        if (!Number.isFinite(issuedAt) || now - issuedAt > 7000) {
+            player.pendingSkillCast = null;
+            return;
+        }
+        const nextAttemptAt = Number(pending.nextAttemptAt || 0);
+        if (now < nextAttemptAt) return;
+        pending.nextAttemptAt = now + 150;
+        this.handleSkillCast(player, {
+            skillId: pending.skillId,
+            targetMobId: pending.targetMobId || null,
+            targetPlayerId: pending.targetPlayerId || null,
+            __autoRetry: true
+        });
+    }
+
     handleSkillCast(player: PlayerRuntime, msg: any) {
         if (player.dead || player.hp <= 0) return;
+        const isAutoRetry = Boolean(msg?.__autoRetry);
         const skillId = String(msg?.skillId || '');
         const skill = this.skillDefs[skillId];
         if (!skill) return;
         const skillLevel = skillId === 'class_primary' || skillId === 'mod_fire_wing' ? 1 : this.getSkillLevel(player, skillId);
         if (skillId !== 'class_primary' && skillId !== 'mod_fire_wing' && skillLevel <= 0) {
-            this.sendRaw(player.ws, { type: 'system_message', text: 'Habilidade nao aprendida.' });
+            if (!isAutoRetry) this.sendRaw(player.ws, { type: 'system_message', text: 'Habilidade nao aprendida.' });
             return;
         }
 
@@ -95,7 +119,7 @@ export class SkillService {
         const cooldownMs = Math.max(400, Number(skill.cooldownMs || 2000));
         const nextAt = Number(player.skillCooldowns[skillId] || 0);
         if (now < nextAt) {
-            this.sendRaw(player.ws, { type: 'system_message', text: `Habilidade em recarga (${Math.ceil((nextAt - now) / 1000)}s).` });
+            if (!isAutoRetry) this.sendRaw(player.ws, { type: 'system_message', text: `Habilidade em recarga (${Math.ceil((nextAt - now) / 1000)}s).` });
             return;
         }
         const hpBeforeCast = Number(player.hp || 0);
@@ -107,7 +131,8 @@ export class SkillService {
             mapInstanceId = this.mapInstanceId(player.mapKey, player.mapId);
             targetMob = this.getMobs().find((m) => m.id === targetMobId && m.mapId === mapInstanceId);
             if (!targetMob) {
-                this.sendRaw(player.ws, { type: 'system_message', text: 'Selecione um alvo para usar a habilidade.' });
+                player.pendingSkillCast = null;
+                if (!isAutoRetry) this.sendRaw(player.ws, { type: 'system_message', text: 'Selecione um alvo para usar a habilidade.' });
                 return;
             }
 
@@ -115,10 +140,18 @@ export class SkillService {
             const edgeDistance = currentDistance - (targetMob.size / 2 + PLAYER_HALF_SIZE);
             const range = Number(skill.range || 100);
             if (edgeDistance > range) {
-                this.sendRaw(player.ws, { type: 'system_message', text: 'Muito longe para usar esta habilidade.' });
+                player.pendingSkillCast = {
+                    skillId,
+                    targetMobId: targetMob.id,
+                    targetPlayerId: null,
+                    issuedAt: Number(player.pendingSkillCast?.issuedAt || now),
+                    nextAttemptAt: now + 150
+                };
+                this.assignPathTo(player, Number(targetMob.x), Number(targetMob.y));
                 return;
             }
         }
+        player.pendingSkillCast = null;
 
         if (skill.hpCostPct && skill.hpCostPct > 0) {
             const hpCost = Math.max(1, Math.floor(Number(player.maxHp || 1) * Number(skill.hpCostPct)));
@@ -188,6 +221,15 @@ export class SkillService {
             this.applyDamageToMobAndHandleDeath(player, targetMob, damage, now);
             this.broadcastMobHit(player, targetMob);
             this.applyOnHitSkillEffects(player, damage, now);
+            if (skill.id === 'arc_franco_ponteira_envenenada' && Number(targetMob.hp || 0) > 0) {
+                this.applyMobDamageOverTime(player, targetMob, mapInstanceId, {
+                    dotKey: 'arc_poison',
+                    ticks: 4,
+                    intervalMs: 1000,
+                    damagePerTick: Math.max(1, Math.floor(damage * 0.24)),
+                    effectKey: 'arc_poison_tick'
+                });
+            }
             if (skill.id === 'ass_letal_sentenca') {
                 const delayedDamage = Math.max(1, Math.floor(damage * 0.75));
                 setTimeout(() => {
@@ -215,6 +257,38 @@ export class SkillService {
         });
         player.lastCombatAt = now;
         if (Number(player.hp || 0) !== hpBeforeCast) this.sendStatsUpdated(player);
+    }
+
+    private applyMobDamageOverTime(
+        player: PlayerRuntime,
+        targetMob: any,
+        mapInstanceId: string,
+        config: { dotKey: string; ticks: number; intervalMs: number; damagePerTick: number; effectKey: string; }
+    ) {
+        const key = `${config.dotKey}:${player.id}:${String(targetMob.id)}`;
+        const token = Number(this.mobDotTokens.get(key) || 0) + 1;
+        this.mobDotTokens.set(key, token);
+        const ticks = Math.max(1, Math.floor(Number(config.ticks || 1)));
+        const intervalMs = Math.max(250, Math.floor(Number(config.intervalMs || 1000)));
+        const damagePerTick = Math.max(1, Math.floor(Number(config.damagePerTick || 1)));
+
+        for (let i = 1; i <= ticks; i++) {
+            setTimeout(() => {
+                const activeToken = Number(this.mobDotTokens.get(key) || 0);
+                if (activeToken !== token) return;
+                const liveMob = this.getMobs().find((m) => m.id === targetMob.id && m.mapId === mapInstanceId);
+                if (!liveMob || Number(liveMob.hp || 0) <= 0) return;
+                this.applyDamageToMobAndHandleDeath(player, liveMob, damagePerTick, Date.now());
+                this.broadcastMobHit(player, liveMob);
+                this.sendSkillEffect(player.mapKey, player.mapId, {
+                    sourceId: player.id,
+                    targetId: liveMob.id,
+                    x: liveMob.x,
+                    y: liveMob.y,
+                    effectKey: config.effectKey
+                });
+            }, i * intervalMs);
+        }
     }
 
     handleSkillLearn(player: PlayerRuntime, msg: any) {
@@ -263,4 +337,3 @@ export class SkillService {
         this.sendStatsUpdated(player);
     }
 }
-

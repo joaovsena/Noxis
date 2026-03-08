@@ -147,7 +147,7 @@ export const MOB_VARIANTS = {
     subboss: { mult: 5, size: 72, color: '#8e44ad' },
     boss: { mult: 9, size: 96, color: '#111111' }
 };
-export const ITEM_PICKUP_RANGE = 90;
+export const ITEM_PICKUP_RANGE = 110;
 export const GROUND_ITEM_TTL_MS = 60000;
 export const COMBAT_LOCK_MS = 10000;
 export const PARTY_MAX_MEMBERS = 5;

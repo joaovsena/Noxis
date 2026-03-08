@@ -169,6 +169,9 @@ export class WSHandler {
             case 'hotbar.set':
                 this.controller.handleHotbarSet(player, msg as any);
                 break;
+            case 'character.back':
+                void this.controller.handleCharacterBack(ws as any);
+                break;
             // Adicionar outros cases...
         }
     }

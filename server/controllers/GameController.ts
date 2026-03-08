@@ -247,6 +247,7 @@ export class GameController {
             this.mapInstanceId.bind(this),
             () => this.mobService.getMobs(),
             (mapId) => this.mobService.getMobsByMap(mapId),
+            this.assignPathTo.bind(this),
             this.getSkillPrerequisite.bind(this),
             this.normalizeSkillLevels.bind(this),
             this.getAvailableSkillPoints.bind(this),
@@ -540,6 +541,32 @@ export class GameController {
         }
     }
 
+    async handleCharacterBack(ws: AuthSocket) {
+        try {
+            const playerId = Number(ws?.playerId || 0);
+            if (!Number.isInteger(playerId) || playerId <= 0) return;
+            const player = this.players.get(playerId);
+            if (!player) return;
+            await this.handleDisconnect(playerId);
+            ws.playerId = undefined;
+            if (!ws.authUserId) return;
+            const account = await this.persistence.getUserById(String(ws.authUserId));
+            const characters = Array.isArray((account as any)?.players)
+                ? (account as any).players
+                : [];
+            ws.pendingPlayerProfiles = characters;
+            ws.authRole = characters.some((ch: any) => ch?.role === 'adm') ? 'adm' : 'player';
+            if (!characters.length) {
+                ws.send(JSON.stringify({ type: 'auth_character_required', message: 'Crie um personagem para continuar.' }));
+                return;
+            }
+            this.sendCharacterSelection(ws, characters);
+        } catch (error) {
+            this.sendRaw(ws as any, { type: 'auth_error', message: 'Nao foi possivel voltar para a selecao.' });
+            logEvent('ERROR', 'character_back_error', { error: String(error), userId: ws?.authUserId || null });
+        }
+    }
+
     private buildNewPlayerProfile(username: string, name: string, selectedClass: string, gender: 'male' | 'female') {
         const baseStats = this.buildClassBaseStats(selectedClass);
         const isSena = String(username || '').toLowerCase() === 'sena' || String(name || '').toLowerCase() === 'sena';
@@ -631,13 +658,15 @@ export class GameController {
             pathDestinationY: spawn.y,
             lastMoveCheckX: spawn.x,
             lastMoveCheckY: spawn.y,
-            lastMoveProgressAt: Date.now()
+            lastMoveProgressAt: Date.now(),
+            pendingSkillCast: null
         };
         this.recomputePlayerStats(runtime);
         return runtime;
     }
 
     handleMove(player: PlayerRuntime, msg: MoveMessage) {
+        player.pendingSkillCast = null;
         this.movementService.handleMove(player, msg);
     }
 
@@ -1217,6 +1246,7 @@ export class GameController {
             this.pruneExpiredSkillEffects(player, now);
             if (player.dead || player.hp <= 0) continue;
             this.movePlayerTowardTarget(player, deltaSeconds, now);
+            this.skillService.processPendingSkillCast(player, now);
             this.processPortalCollision(player, now);
             this.processAutoAttack(player, now);
             this.processAutoAttackPlayer(player, now);
@@ -1452,26 +1482,42 @@ export class GameController {
         return this.mapService.projectToWalkable(mapKey, x, y);
     }
 
-    private grantXp(player: PlayerRuntime, amount: number) {
-        player.xp += amount;
-        let next = xpRequired(player.level);
-        let levelsGained = 0;
-        while (player.xp >= next) {
-            player.xp -= next;
-            player.level += 1;
-            levelsGained += 1;
-            next = xpRequired(player.level);
-        }
-        if (levelsGained > 0) {
-            this.sendRaw(player.ws, {
-                type: 'system_message',
-                text: `Voce ganhou ${levelsGained * 5} ponto(s) de atributo.`
-            });
-        }
+    private grantXp(player: PlayerRuntime, amount: number, context?: { mapKey?: string; mapId?: string; }) {
+        const totalXp = Math.max(0, Math.floor(Number(amount || 0)));
+        if (totalXp <= 0) return;
+        const mapKey = String(context?.mapKey || player.mapKey || '');
+        const mapId = String(context?.mapId || player.mapId || '');
+        const eligible = [...this.players.values()].filter((candidate) =>
+            String(candidate.partyId || '') !== ''
+            && String(candidate.partyId || '') === String(player.partyId || '')
+            && String(candidate.mapKey || '') === mapKey
+            && String(candidate.mapId || '') === mapId
+        );
+        const targets = eligible.length > 0 ? eligible : [player];
+        const share = Math.max(1, Math.floor(totalXp / targets.length));
+        const remainder = Math.max(0, totalXp - (share * targets.length));
 
-        this.recomputePlayerStats(player);
-        this.persistPlayer(player);
-        if (levelsGained > 0) this.sendStatsUpdated(player);
+        targets.forEach((target, index) => {
+            const gain = share + (index === 0 ? remainder : 0);
+            target.xp += gain;
+            let next = xpRequired(target.level);
+            let levelsGained = 0;
+            while (target.xp >= next) {
+                target.xp -= next;
+                target.level += 1;
+                levelsGained += 1;
+                next = xpRequired(target.level);
+            }
+            if (levelsGained > 0) {
+                this.sendRaw(target.ws, {
+                    type: 'system_message',
+                    text: `Voce ganhou ${levelsGained * 5} ponto(s) de atributo.`
+                });
+            }
+            this.recomputePlayerStats(target);
+            this.persistPlayer(target);
+            this.sendStatsUpdated(target);
+        });
     }
 
     private normalizeInventorySlots(items: any[], equippedWeaponId: string | null = null) {

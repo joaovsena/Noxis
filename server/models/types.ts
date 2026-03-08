@@ -47,6 +47,13 @@ export interface PlayerRuntime {
     lastMoveCheckX?: number;
     lastMoveCheckY?: number;
     lastMoveProgressAt?: number;
+    pendingSkillCast?: {
+        skillId: string;
+        targetMobId?: string | null;
+        targetPlayerId?: number | null;
+        issuedAt: number;
+        nextAttemptAt?: number;
+    } | null;
 }
 
 export interface Mob {
@@ -115,6 +122,10 @@ export interface CharacterCreateMessage {
 export interface CharacterEnterMessage {
     type: 'character_enter';
     slot?: number;
+}
+
+export interface CharacterBackMessage {
+    type: 'character.back';
 }
 
 export interface MoveMessage {
@@ -336,6 +347,7 @@ export type WSMessage =
     | AuthMessage
     | CharacterCreateMessage
     | CharacterEnterMessage
+    | CharacterBackMessage
     | MoveMessage
     | TargetMobMessage
     | ChatMessage

@@ -476,6 +476,12 @@ button:hover {
     font-size: 12px;
 }
 
+#player-char-select {
+    min-width: 58px;
+    padding: 3px 8px;
+    font-size: 12px;
+}
+
 .player-pvp-menu {
     margin: 6px 0 4px;
     display: grid;
@@ -625,6 +631,19 @@ button:hover {
     transition: width 140ms ease, transform 140ms ease;
 }
 
+.chat-manual-resizer {
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    width: 14px;
+    height: 14px;
+    border-top-right-radius: 8px;
+    cursor: nesw-resize;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.55) 0 2px, transparent 2px 100%);
+    opacity: 0;
+    pointer-events: none;
+}
+
 .chat-tabs {
     display: flex;
     gap: 6px;
@@ -688,6 +707,26 @@ button:hover {
 .hud-chat.minimized #chat-input,
 .hud-chat.minimized .chat-scope {
     display: none;
+}
+
+.hud-chat.chat-manual {
+    width: 360px;
+    height: 260px;
+    min-width: 280px;
+    min-height: 170px;
+    max-width: min(80vw, 820px);
+    max-height: min(70vh, 560px);
+    overflow: hidden;
+    transition: none;
+}
+
+.hud-chat.chat-manual .chat-manual-resizer {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.hud-chat.chat-manual #chat-log {
+    height: calc(100% - 86px);
 }
 
 #chat-toggle {

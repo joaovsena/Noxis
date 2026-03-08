@@ -12,7 +12,7 @@ type OnHitSkillFn = (player: PlayerRuntime, dealtDamage: number, now: number) =>
 type SendStatsFn = (player: PlayerRuntime) => void;
 type PersistPlayerFn = (player: PlayerRuntime) => void;
 type SyncPartyFn = () => void;
-type GrantXpFn = (player: PlayerRuntime, amount: number) => void;
+type GrantXpFn = (player: PlayerRuntime, amount: number, context?: { mapKey?: string; mapId?: string; }) => void;
 type MapInstanceIdFn = (mapKey: string, mapId: string) => string;
 type DropPosFn = (originX: number, originY: number, dropIndex: number, dropTotal: number, mapKey: string) => { x: number; y: number };
 type PickWeaponTemplateFn = () => any;
@@ -67,7 +67,7 @@ export class CombatCoreService {
 
         if (mob.hp > 0) return true;
 
-        this.grantXp(player, mob.xpReward);
+        this.grantXp(player, mob.xpReward, { mapKey: player.mapKey, mapId: player.mapId });
         const mapInstanceId = this.mapInstanceId(player.mapKey, player.mapId);
         const dropDefs: Array<'weapon' | 'potion_hp' | 'skill_reset_hourglass'> = [];
         if (Math.random() < 0.5) dropDefs.push('weapon');
@@ -188,4 +188,3 @@ export class CombatCoreService {
         }
     }
 }
-

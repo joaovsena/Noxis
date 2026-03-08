@@ -26,6 +26,7 @@ export class MenuUI {
         this.characterSummary = document.getElementById('character-summary');
         this.btnCharacterEnter = document.getElementById('btn-character-enter');
         this.btnCharacterCreateFromSelect = document.getElementById('btn-character-create-from-select');
+        this.btnCharacterBackLogin = document.getElementById('btn-character-back-login');
 
         this.createCharName = document.getElementById('create-char-name');
         this.createCharClass = document.getElementById('create-char-class');
@@ -141,6 +142,9 @@ export class MenuUI {
         });
 
         this.btnCharacterCreateFromSelect.addEventListener('click', () => this.showCharacterCreate());
+        if (this.btnCharacterBackLogin) {
+            this.btnCharacterBackLogin.addEventListener('click', () => this.game.backToLoginFromCharacterSelect());
+        }
         this.btnCharacterCreate.addEventListener('click', () => {
             const payload = this.collectCharacterCreate();
             if (!payload) return;

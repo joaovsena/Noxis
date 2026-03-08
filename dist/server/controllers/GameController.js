@@ -110,7 +110,7 @@ class GameController {
         this.combatService = new CombatService_1.CombatService(this.players, this.mapInstanceId.bind(this), this.sendRaw.bind(this), this.partyService.hasParty.bind(this.partyService), this.partyService.arePlayersInSameParty.bind(this.partyService), this.tryPlayerAttack.bind(this));
         this.inventoryService = new InventoryService_1.InventoryService(() => this.groundItems, (items) => { this.groundItems = items; }, this.mapInstanceId.bind(this), this.persistPlayer.bind(this), this.recomputePlayerStats.bind(this), this.sendInventoryState.bind(this), this.sendStatsUpdated.bind(this), this.normalizeHotbarBindings.bind(this), this.firstFreeInventorySlot.bind(this), this.getSpentSkillPoints.bind(this), this.sendRaw.bind(this));
         this.skillEffectsService = new SkillEffectsService_1.SkillEffectsService(this.players, this.sendRaw.bind(this));
-        this.skillService = new SkillService_1.SkillService(SKILL_DEFS, this.sendRaw.bind(this), this.normalizeClassId.bind(this), this.getSkillLevel.bind(this), this.pruneExpiredSkillEffects.bind(this), this.applyTimedSkillEffect.bind(this), this.sendSkillEffect.bind(this), this.computeMobDamage.bind(this), this.applyDamageToMobAndHandleDeath.bind(this), this.broadcastMobHit.bind(this), this.applyOnHitSkillEffects.bind(this), this.hasActiveSkillEffect.bind(this), this.removeSkillEffectById.bind(this), this.getSkillPowerWithLevel.bind(this), this.sendStatsUpdated.bind(this), this.mapInstanceId.bind(this), () => this.mobService.getMobs(), (mapId) => this.mobService.getMobsByMap(mapId), this.getSkillPrerequisite.bind(this), this.normalizeSkillLevels.bind(this), this.getAvailableSkillPoints.bind(this), this.recomputePlayerStats.bind(this), this.persistPlayer.bind(this));
+        this.skillService = new SkillService_1.SkillService(SKILL_DEFS, this.sendRaw.bind(this), this.normalizeClassId.bind(this), this.getSkillLevel.bind(this), this.pruneExpiredSkillEffects.bind(this), this.applyTimedSkillEffect.bind(this), this.sendSkillEffect.bind(this), this.computeMobDamage.bind(this), this.applyDamageToMobAndHandleDeath.bind(this), this.broadcastMobHit.bind(this), this.applyOnHitSkillEffects.bind(this), this.hasActiveSkillEffect.bind(this), this.removeSkillEffectById.bind(this), this.getSkillPowerWithLevel.bind(this), this.sendStatsUpdated.bind(this), this.mapInstanceId.bind(this), () => this.mobService.getMobs(), (mapId) => this.mobService.getMobsByMap(mapId), this.assignPathTo.bind(this), this.getSkillPrerequisite.bind(this), this.normalizeSkillLevels.bind(this), this.getAvailableSkillPoints.bind(this), this.recomputePlayerStats.bind(this), this.persistPlayer.bind(this));
         this.combatRuntimeService = new CombatRuntimeService_1.CombatRuntimeService(this.players, this.mobService, () => this.mobsPeacefulMode, this.mapInstanceId.bind(this), this.projectToWalkable.bind(this), this.recalculatePathToward.bind(this), this.getActiveSkillEffectAggregate.bind(this), this.computeHitChance.bind(this), this.getMobEvasion.bind(this), this.computeMobDamage.bind(this), this.applyDamageToMobAndHandleDeath.bind(this), this.applyOnHitSkillEffects.bind(this), this.sendStatsUpdated.bind(this), this.broadcastMobHit.bind(this), this.sendRaw.bind(this), this.persistPlayer.bind(this), this.syncAllPartyStates.bind(this), this.tryPlayerAttack.bind(this), this.getPvpAttackPermission.bind(this), this.isBlockedAt.bind(this), this.computeDamageAfterMitigation.bind(this));
         this.combatCoreService = new CombatCoreService_1.CombatCoreService(this.players, this.mobService, this.getPvpAttackPermission.bind(this), this.sendRaw.bind(this), this.getActiveSkillEffectAggregate.bind(this), this.computeHitChance.bind(this), this.shouldLuckyStrike.bind(this), this.computeDamageAfterMitigation.bind(this), this.applyOnHitSkillEffects.bind(this), this.sendStatsUpdated.bind(this), this.persistPlayer.bind(this), this.syncAllPartyStates.bind(this), this.grantXp.bind(this), this.mapInstanceId.bind(this), this.computeLootDropPosition.bind(this), this.pickRandomWeaponTemplate.bind(this), this.dropWeaponAt.bind(this), this.dropHpPotionAt.bind(this), this.dropSkillResetHourglassAt.bind(this));
     }
@@ -332,6 +332,35 @@ class GameController {
             (0, logger_1.logEvent)('ERROR', 'character_enter_error', { error: String(error), userId: ws.authUserId || null });
         }
     }
+    async handleCharacterBack(ws) {
+        try {
+            const playerId = Number(ws?.playerId || 0);
+            if (!Number.isInteger(playerId) || playerId <= 0)
+                return;
+            const player = this.players.get(playerId);
+            if (!player)
+                return;
+            await this.handleDisconnect(playerId);
+            ws.playerId = undefined;
+            if (!ws.authUserId)
+                return;
+            const account = await this.persistence.getUserById(String(ws.authUserId));
+            const characters = Array.isArray(account?.players)
+                ? account.players
+                : [];
+            ws.pendingPlayerProfiles = characters;
+            ws.authRole = characters.some((ch) => ch?.role === 'adm') ? 'adm' : 'player';
+            if (!characters.length) {
+                ws.send(JSON.stringify({ type: 'auth_character_required', message: 'Crie um personagem para continuar.' }));
+                return;
+            }
+            this.sendCharacterSelection(ws, characters);
+        }
+        catch (error) {
+            this.sendRaw(ws, { type: 'auth_error', message: 'Nao foi possivel voltar para a selecao.' });
+            (0, logger_1.logEvent)('ERROR', 'character_back_error', { error: String(error), userId: ws?.authUserId || null });
+        }
+    }
     buildNewPlayerProfile(username, name, selectedClass, gender) {
         const baseStats = this.buildClassBaseStats(selectedClass);
         const isSena = String(username || '').toLowerCase() === 'sena' || String(name || '').toLowerCase() === 'sena';
@@ -415,12 +444,14 @@ class GameController {
             pathDestinationY: spawn.y,
             lastMoveCheckX: spawn.x,
             lastMoveCheckY: spawn.y,
-            lastMoveProgressAt: Date.now()
+            lastMoveProgressAt: Date.now(),
+            pendingSkillCast: null
         };
         this.recomputePlayerStats(runtime);
         return runtime;
     }
     handleMove(player, msg) {
+        player.pendingSkillCast = null;
         this.movementService.handleMove(player, msg);
     }
     handleTargetMob(player, msg) {
@@ -937,6 +968,7 @@ class GameController {
             if (player.dead || player.hp <= 0)
                 continue;
             this.movePlayerTowardTarget(player, deltaSeconds, now);
+            this.skillService.processPendingSkillCast(player, now);
             this.processPortalCollision(player, now);
             this.processAutoAttack(player, now);
             this.processAutoAttackPlayer(player, now);
@@ -1147,26 +1179,40 @@ class GameController {
     projectToWalkable(mapKey, x, y) {
         return this.mapService.projectToWalkable(mapKey, x, y);
     }
-    grantXp(player, amount) {
-        player.xp += amount;
-        let next = (0, math_1.xpRequired)(player.level);
-        let levelsGained = 0;
-        while (player.xp >= next) {
-            player.xp -= next;
-            player.level += 1;
-            levelsGained += 1;
-            next = (0, math_1.xpRequired)(player.level);
-        }
-        if (levelsGained > 0) {
-            this.sendRaw(player.ws, {
-                type: 'system_message',
-                text: `Voce ganhou ${levelsGained * 5} ponto(s) de atributo.`
-            });
-        }
-        this.recomputePlayerStats(player);
-        this.persistPlayer(player);
-        if (levelsGained > 0)
-            this.sendStatsUpdated(player);
+    grantXp(player, amount, context) {
+        const totalXp = Math.max(0, Math.floor(Number(amount || 0)));
+        if (totalXp <= 0)
+            return;
+        const mapKey = String(context?.mapKey || player.mapKey || '');
+        const mapId = String(context?.mapId || player.mapId || '');
+        const eligible = [...this.players.values()].filter((candidate) => String(candidate.partyId || '') !== ''
+            && String(candidate.partyId || '') === String(player.partyId || '')
+            && String(candidate.mapKey || '') === mapKey
+            && String(candidate.mapId || '') === mapId);
+        const targets = eligible.length > 0 ? eligible : [player];
+        const share = Math.max(1, Math.floor(totalXp / targets.length));
+        const remainder = Math.max(0, totalXp - (share * targets.length));
+        targets.forEach((target, index) => {
+            const gain = share + (index === 0 ? remainder : 0);
+            target.xp += gain;
+            let next = (0, math_1.xpRequired)(target.level);
+            let levelsGained = 0;
+            while (target.xp >= next) {
+                target.xp -= next;
+                target.level += 1;
+                levelsGained += 1;
+                next = (0, math_1.xpRequired)(target.level);
+            }
+            if (levelsGained > 0) {
+                this.sendRaw(target.ws, {
+                    type: 'system_message',
+                    text: `Voce ganhou ${levelsGained * 5} ponto(s) de atributo.`
+                });
+            }
+            this.recomputePlayerStats(target);
+            this.persistPlayer(target);
+            this.sendStatsUpdated(target);
+        });
     }
     normalizeInventorySlots(items, equippedWeaponId = null) {
         return this.inventoryService.normalizeInventorySlots(items, equippedWeaponId);

@@ -32,6 +32,7 @@ type SendStatsUpdatedFn = (player: PlayerRuntime) => void;
 type MapInstanceIdFn = (mapKey: string, mapId: string) => string;
 type GetMobsFn = () => any[];
 type GetMobsByMapFn = (mapId: string) => any[];
+type AssignPathToFn = (player: PlayerRuntime, destinationX: number, destinationY: number) => void;
 type GetSkillPrerequisiteFn = (skillId: string) => string | null;
 type NormalizeSkillLevelsFn = (input: any) => Record<string, number>;
 type GetAvailableSkillPointsFn = (player: PlayerRuntime) => number;
@@ -56,13 +57,17 @@ export declare class SkillService {
     private readonly mapInstanceId;
     private readonly getMobs;
     private readonly getMobsByMap;
+    private readonly assignPathTo;
     private readonly getSkillPrerequisite;
     private readonly normalizeSkillLevels;
     private readonly getAvailableSkillPoints;
     private readonly recomputePlayerStats;
     private readonly persistPlayer;
-    constructor(skillDefs: Record<string, SkillDef>, sendRaw: SendRawFn, normalizeClassId: NormalizeClassIdFn, getSkillLevel: GetSkillLevelFn, pruneExpiredSkillEffects: PruneEffectsFn, applyTimedSkillEffect: ApplyTimedEffectFn, sendSkillEffect: SendSkillEffectFn, computeMobDamage: ComputeMobDamageFn, applyDamageToMobAndHandleDeath: ApplyDamageMobFn, broadcastMobHit: BroadcastMobHitFn, applyOnHitSkillEffects: ApplyOnHitFn, hasActiveSkillEffect: HasEffectFn, removeSkillEffectById: RemoveEffectFn, getSkillPowerWithLevel: GetSkillPowerWithLevelFn, sendStatsUpdated: SendStatsUpdatedFn, mapInstanceId: MapInstanceIdFn, getMobs: GetMobsFn, getMobsByMap: GetMobsByMapFn, getSkillPrerequisite: GetSkillPrerequisiteFn, normalizeSkillLevels: NormalizeSkillLevelsFn, getAvailableSkillPoints: GetAvailableSkillPointsFn, recomputePlayerStats: RecomputePlayerStatsFn, persistPlayer: PersistPlayerFn);
+    private readonly mobDotTokens;
+    constructor(skillDefs: Record<string, SkillDef>, sendRaw: SendRawFn, normalizeClassId: NormalizeClassIdFn, getSkillLevel: GetSkillLevelFn, pruneExpiredSkillEffects: PruneEffectsFn, applyTimedSkillEffect: ApplyTimedEffectFn, sendSkillEffect: SendSkillEffectFn, computeMobDamage: ComputeMobDamageFn, applyDamageToMobAndHandleDeath: ApplyDamageMobFn, broadcastMobHit: BroadcastMobHitFn, applyOnHitSkillEffects: ApplyOnHitFn, hasActiveSkillEffect: HasEffectFn, removeSkillEffectById: RemoveEffectFn, getSkillPowerWithLevel: GetSkillPowerWithLevelFn, sendStatsUpdated: SendStatsUpdatedFn, mapInstanceId: MapInstanceIdFn, getMobs: GetMobsFn, getMobsByMap: GetMobsByMapFn, assignPathTo: AssignPathToFn, getSkillPrerequisite: GetSkillPrerequisiteFn, normalizeSkillLevels: NormalizeSkillLevelsFn, getAvailableSkillPoints: GetAvailableSkillPointsFn, recomputePlayerStats: RecomputePlayerStatsFn, persistPlayer: PersistPlayerFn);
+    processPendingSkillCast(player: PlayerRuntime, now: number): void;
     handleSkillCast(player: PlayerRuntime, msg: any): void;
+    private applyMobDamageOverTime;
     handleSkillLearn(player: PlayerRuntime, msg: any): void;
 }
 export {};

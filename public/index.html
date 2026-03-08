@@ -54,6 +54,7 @@
                     <div class="character-actions">
                         <button id="btn-character-enter" type="button" disabled>Jogar</button>
                         <button id="btn-character-create-from-select" type="button">Criar personagem</button>
+                        <button id="btn-character-back-login" type="button">Voltar</button>
                     </div>
                 </div>
                 <div id="character-summary" class="preview-help">Nenhum slot selecionado.</div>
@@ -119,6 +120,7 @@
         <div class="player-meta">
             <div class="player-name-row">
                 <div id="player-name">-</div>
+                <button id="player-char-select" title="Trocar personagem">Trocar</button>
                 <button id="player-pvp-toggle" title="Modo PVP">Paz</button>
             </div>
             <div id="player-pvp-menu" class="player-pvp-menu hidden">
@@ -209,10 +211,12 @@
             <button class="chat-scope" data-scope="global">Global</button>
             <button id="chat-toggle">Chat</button>
         </div>
+        <div id="chat-manual-resizer" class="chat-manual-resizer" title="Redimensionar chat"></div>
         <div id="chat-mode-menu" class="chat-mode-menu hidden">
             <button class="chat-mode-option" data-mode="expanded">Completo</button>
             <button class="chat-mode-option" data-mode="compact">Compacto</button>
             <button class="chat-mode-option" data-mode="mini">Mini</button>
+            <button class="chat-mode-option" data-mode="manual">Manual</button>
         </div>
         <div id="chat-log"></div>
         <input id="chat-input" maxlength="180" placeholder="Digite e pressione Enter">
@@ -386,6 +390,6 @@
     </div>
 
     <canvas id="gameCanvas" style="display:none;"></canvas>
-    <script type="module" src="js/main.js?v=knight-paperdoll-20260307"></script>
+    <script type="module" src="js/main.js?v=gameplay-20260308a"></script>
 </body>
 </html>

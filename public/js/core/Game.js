@@ -18,7 +18,7 @@ export class Game {
         this.selectedMobId = null;
         this.hoveredGroundItemId = null;
         this.pendingPickup = null;
-        this.pickupInteractRange = 90;
+        this.pickupInteractRange = 110;
         this.groundItemHitHalfSize = 20;
 
         this.tileSize = 64;
@@ -49,6 +49,7 @@ export class Game {
         this.perfHud = document.getElementById('perf-hud');
         this.playerAvatar = document.getElementById('player-avatar');
         this.playerName = document.getElementById('player-name');
+        this.playerCharSelectBtn = document.getElementById('player-char-select');
         this.playerPvpToggle = document.getElementById('player-pvp-toggle');
         this.playerPvpMenu = document.getElementById('player-pvp-menu');
         this.playerPvpOptions = [...document.querySelectorAll('.pvp-mode-option')];
@@ -136,10 +137,13 @@ export class Game {
         this.chatInput = document.getElementById('chat-input');
         this.chatScopeButtons = [...document.querySelectorAll('.chat-scope')];
         this.chatScope = 'local';
+        this.chatTypingMode = false;
         this.chatToggle = document.getElementById('chat-toggle');
+        this.chatManualResizer = document.getElementById('chat-manual-resizer');
         this.chatModeMenu = document.getElementById('chat-mode-menu');
         this.chatModeOptions = [...document.querySelectorAll('.chat-mode-option')];
         this.chatLayoutOverrideMode = null;
+        this.chatManualResizeState = null;
         this.lastMoveAck = null;
         this.lastMoveSent = null;
         this.moveReqCounter = 0;
@@ -407,6 +411,32 @@ export class Game {
         window.addEventListener('resize', () => this.resize());
 
         window.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (!this.localId) return;
+            const active = document.activeElement;
+            const isChatInputActive = active === this.chatInput;
+            if (isChatInputActive) {
+                e.preventDefault();
+                const text = String(this.chatInput.value || '').trim();
+                if (text) {
+                    this.network.send({
+                        type: 'chat_send',
+                        scope: this.chatScope,
+                        text
+                    });
+                    this.chatInput.value = '';
+                }
+                this.chatInput.blur();
+                this.chatTypingMode = false;
+                return;
+            }
+            if (isTypingInField()) return;
+            e.preventDefault();
+            this.chatInput.focus();
+            this.chatTypingMode = true;
+        });
+
+        window.addEventListener('keydown', (e) => {
             if (!this.localId) return;
             if (e.key === 'Escape') {
                 this.selectedMobId = null;
@@ -507,14 +537,7 @@ export class Game {
 
         this.chatInput.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
-            const text = this.chatInput.value.trim();
-            if (!text) return;
-            this.network.send({
-                type: 'chat_send',
-                scope: this.chatScope,
-                text
-            });
-            this.chatInput.value = '';
+            e.preventDefault();
         });
 
         this.menuAttrs.addEventListener('click', () => {
@@ -673,6 +696,12 @@ export class Game {
             if (!this.playerPvpMenu) return;
             this.playerPvpMenu.classList.toggle('hidden');
         });
+        if (this.playerCharSelectBtn) {
+            this.playerCharSelectBtn.addEventListener('click', () => {
+                if (!this.localId) return;
+                this.network.send({ type: 'character.back' });
+            });
+        }
         this.playerPvpOptions.forEach((btn) => {
             btn.addEventListener('click', () => {
                 if (!this.localId || !this.players[this.localId]) return;
@@ -759,10 +788,47 @@ export class Game {
                 e.preventDefault();
                 e.stopPropagation();
                 const mode = String(btn.dataset.mode || 'expanded');
-                this.chatLayoutOverrideMode = mode === 'compact' || mode === 'mini' ? mode : 'expanded';
+                this.chatLayoutOverrideMode = mode === 'compact' || mode === 'mini' || mode === 'manual' ? mode : 'expanded';
                 if (this.chatModeMenu) this.chatModeMenu.classList.add('hidden');
                 this.updateHudLayout();
             });
+        });
+        if (this.chatManualResizer) {
+            this.chatManualResizer.addEventListener('pointerdown', (e) => {
+                if (!this.chatWrap?.classList?.contains('chat-manual')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const rect = this.chatWrap.getBoundingClientRect();
+                this.chatManualResizeState = {
+                    pointerId: e.pointerId,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startW: rect.width,
+                    startH: rect.height
+                };
+                this.chatManualResizer.setPointerCapture?.(e.pointerId);
+            });
+        }
+        window.addEventListener('pointermove', (e) => {
+            const state = this.chatManualResizeState;
+            if (!state) return;
+            if (Number(state.pointerId) !== Number(e.pointerId)) return;
+            e.preventDefault();
+            const dx = Number(e.clientX) - Number(state.startX);
+            const dy = Number(e.clientY) - Number(state.startY);
+            const maxW = Math.max(320, Math.floor(window.innerWidth * 0.8));
+            const maxH = Math.max(220, Math.floor(window.innerHeight * 0.7));
+            const nextW = Math.max(280, Math.min(maxW, Math.floor(Number(state.startW) + dx)));
+            const nextH = Math.max(170, Math.min(maxH, Math.floor(Number(state.startH) - dy)));
+            this.chatWrap.style.width = `${nextW}px`;
+            this.chatWrap.style.height = `${nextH}px`;
+        });
+        window.addEventListener('pointerup', (e) => {
+            const state = this.chatManualResizeState;
+            if (!state) return;
+            if (Number(state.pointerId) !== Number(e.pointerId)) return;
+            this.chatManualResizeState = null;
+            this.chatManualResizer?.releasePointerCapture?.(e.pointerId);
         });
         window.addEventListener('click', (e) => {
             const target = e.target;
@@ -1053,6 +1119,10 @@ export class Game {
         if (this.menu) this.menu.setStatus('Entrando no mundo...');
     }
 
+    backToLoginFromCharacterSelect() {
+        this.network.disconnect(true);
+    }
+
     /**
      * Exibe mensagens de autenticação na UI.
      */
@@ -1067,6 +1137,19 @@ export class Game {
 
     onCharacterSelect(message) {
         if (!this.menu) return;
+        this.localId = null;
+        this.resetSessionUiState();
+        this.isDead = false;
+        this.reviveOverlay.classList.add('hidden');
+        this.canvas.style.display = 'none';
+        if (this.perfHud) this.perfHud.classList.add('hidden');
+        this.playerCard.classList.add('hidden');
+        this.minimapWrap.classList.add('hidden');
+        this.chatWrap.classList.add('hidden');
+        this.skillbarWrap.classList.add('hidden');
+        this.menusWrap.classList.add('hidden');
+        this.charPanelName.textContent = '-';
+        this.closeAllTooltips('session_reset');
         this.menu.showCharacterSelect(message);
     }
 
@@ -1140,7 +1223,7 @@ export class Game {
     /**
      * Callback de desconexão do socket.
      */
-    onDisconnected() {
+    onDisconnected(manual = false) {
         if (this.moveCommandTimer) {
             clearTimeout(this.moveCommandTimer);
             this.moveCommandTimer = null;
@@ -1197,7 +1280,7 @@ export class Game {
         this.menusWrap.classList.add('hidden');
         if (this.menu) {
             this.menu.showLogin();
-            this.menu.setStatus('Conexao encerrada.', true);
+            this.menu.setStatus(manual ? '' : 'Conexao encerrada.', !manual);
         }
     }
 
@@ -5021,13 +5104,24 @@ export class Game {
 
     setChatLayoutMode(mode) {
         if (!this.chatWrap) return;
-        const safeMode = mode === 'mini' || mode === 'compact' ? mode : 'expanded';
+        const safeMode = mode === 'mini' || mode === 'compact' || mode === 'manual' ? mode : 'expanded';
         this.chatWrap.classList.toggle('chat-compact', safeMode === 'compact');
         this.chatWrap.classList.toggle('chat-mini', safeMode === 'mini');
+        this.chatWrap.classList.toggle('chat-manual', safeMode === 'manual');
+        if (safeMode !== 'manual') {
+            this.chatWrap.style.width = '';
+            this.chatWrap.style.height = '';
+        }
         // Mantem compatibilidade com o estilo antigo.
         this.chatWrap.classList.toggle('minimized', safeMode === 'mini');
         if (this.chatToggle) {
-            const label = safeMode === 'mini' ? 'Mini' : safeMode === 'compact' ? 'Compacto' : 'Completo';
+            const label = safeMode === 'mini'
+                ? 'Mini'
+                : safeMode === 'compact'
+                    ? 'Compacto'
+                    : safeMode === 'manual'
+                        ? 'Manual'
+                        : 'Completo';
             this.chatToggle.textContent = `Chat: ${label}`;
         }
         if (Array.isArray(this.chatModeOptions)) {

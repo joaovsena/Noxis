@@ -6,6 +6,7 @@ export class Network {
         this.game = game;
         this.socket = null;
         this.queue = [];
+        this.manualCloseRequested = false;
         this.pingIntervalMs = 2000;
         this.pingTimer = null;
         this.lastPingNonce = 0;
@@ -42,7 +43,9 @@ export class Network {
         this.socket.onclose = () => {
             this.stopPingLoop();
             this.game.onPingUpdated(null);
-            this.game.onDisconnected();
+            this.game.onDisconnected(Boolean(this.manualCloseRequested));
+            this.manualCloseRequested = false;
+            this.socket = null;
         };
     }
 
@@ -56,6 +59,17 @@ export class Network {
             return;
         }
         this.queue.push(encoded);
+    }
+
+    disconnect(manual = true) {
+        this.manualCloseRequested = Boolean(manual);
+        this.stopPingLoop();
+        this.pendingPings.clear();
+        this.queue = [];
+        if (!this.socket) return;
+        if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
+            this.socket.close();
+        }
     }
 
     /**

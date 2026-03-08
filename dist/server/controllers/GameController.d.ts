@@ -41,6 +41,7 @@ export declare class GameController {
     handleCharacterEnter(ws: AuthSocket, msg: {
         slot?: number;
     }): Promise<void>;
+    handleCharacterBack(ws: AuthSocket): Promise<void>;
     private buildNewPlayerProfile;
     private createRuntimePlayer;
     handleMove(player: PlayerRuntime, msg: MoveMessage): void;

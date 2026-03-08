@@ -113,7 +113,7 @@ exports.MOB_VARIANTS = {
     subboss: { mult: 5, size: 72, color: '#8e44ad' },
     boss: { mult: 9, size: 96, color: '#111111' }
 };
-exports.ITEM_PICKUP_RANGE = 90;
+exports.ITEM_PICKUP_RANGE = 110;
 exports.GROUND_ITEM_TTL_MS = 60000;
 exports.COMBAT_LOCK_MS = 10000;
 exports.PARTY_MAX_MEMBERS = 5;
