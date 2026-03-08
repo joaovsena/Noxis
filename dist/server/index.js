@@ -62,9 +62,12 @@ async function initializeServer() {
                 await gameController.handleDisconnect(extWs.playerId);
             });
         });
+        let lastTickAt = Date.now();
         setInterval(() => {
             const now = Date.now();
-            const dt = config_1.TICK_MS / 1000;
+            const elapsedMs = Math.max(1, now - lastTickAt);
+            lastTickAt = now;
+            const dt = Math.max(0.010, Math.min(0.100, elapsedMs / 1000));
             gameController.tick(dt, now);
             for (const client of wss.clients) {
                 if (client.readyState !== ws_1.WebSocket.OPEN)

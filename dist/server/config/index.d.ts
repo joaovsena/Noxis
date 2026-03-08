@@ -7,7 +7,7 @@ export declare const MAP_KEYS: readonly ["forest", "lava", "undead"];
 export declare const MAP_IDS: ("Z1" | "Z2")[];
 export declare const DEFAULT_MAP_ID = "Z1";
 export declare const DEFAULT_MAP_KEY = "forest";
-export declare const TICK_MS = 50;
+export declare const TICK_MS: number;
 export declare const MOB_COUNTS: {
     normal: number;
     elite: number;

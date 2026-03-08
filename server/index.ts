@@ -68,9 +68,12 @@ async function initializeServer() {
             });
         });
 
+        let lastTickAt = Date.now();
         setInterval(() => {
             const now = Date.now();
-            const dt = TICK_MS / 1000;
+            const elapsedMs = Math.max(1, now - lastTickAt);
+            lastTickAt = now;
+            const dt = Math.max(0.010, Math.min(0.100, elapsedMs / 1000));
             gameController.tick(dt, now);
 
             for (const client of wss.clients) {

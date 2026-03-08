@@ -6,7 +6,10 @@ export const MAP_KEYS = ['forest', 'lava', 'undead'] as const;
 export const MAP_IDS = [...INSTANCE_IDS];
 export const DEFAULT_MAP_ID = 'Z1';
 export const DEFAULT_MAP_KEY = 'forest';
-export const TICK_MS = 50;
+const parsedTickMs = Number(process.env.TICK_MS);
+export const TICK_MS = Number.isFinite(parsedTickMs)
+    ? Math.max(16, Math.min(100, Math.floor(parsedTickMs)))
+    : 33;
 export const MOB_COUNTS = { normal: 25, elite: 15, subboss: 5, boss: 1 };
 export const INVENTORY_SIZE = 36;
 export const MOB_RESPAWN_MS = 10000;
