@@ -148,6 +148,7 @@ export declare class GameController {
     private processPortalCollision;
     private mapInstanceId;
     private isBlockedAt;
+    private getMapTiledCollisionSampler;
     private projectToWalkable;
     private grantXp;
     private normalizeInventorySlots;

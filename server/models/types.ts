@@ -78,6 +78,7 @@ export interface Mob {
 
 export interface GroundItem {
     id: string;
+    templateId?: string;
     type: string;
     name: string;
     slot: string;
@@ -322,6 +323,11 @@ export interface HotbarSetMessage {
     bindings: Record<string, any>;
 }
 
+export interface PingMessage {
+    type: 'ping';
+    nonce?: number;
+}
+
 export type WSMessage =
     | AuthMessage
     | CharacterCreateMessage
@@ -364,4 +370,5 @@ export type WSMessage =
     | PlayerReviveMessage
     | SkillCastMessage
     | SkillLearnMessage
-    | HotbarSetMessage;
+    | HotbarSetMessage
+    | PingMessage;

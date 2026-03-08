@@ -6,6 +6,10 @@ export class Network {
         this.game = game;
         this.socket = null;
         this.queue = [];
+        this.pingIntervalMs = 2000;
+        this.pingTimer = null;
+        this.lastPingNonce = 0;
+        this.pendingPings = new Map();
     }
 
     /**
@@ -22,6 +26,7 @@ export class Network {
             while (this.queue.length > 0) {
                 this.socket.send(this.queue.shift());
             }
+            this.startPingLoop();
         };
 
         this.socket.onmessage = (event) => {
@@ -35,6 +40,8 @@ export class Network {
         };
 
         this.socket.onclose = () => {
+            this.stopPingLoop();
+            this.game.onPingUpdated(null);
             this.game.onDisconnected();
         };
     }
@@ -55,6 +62,17 @@ export class Network {
      * Roteia mensagens do servidor para handlers do Game.
      */
     handleMessage(message) {
+        if (message.type === 'pong') {
+            const nonce = Number(message.nonce);
+            if (Number.isFinite(nonce) && this.pendingPings.has(nonce)) {
+                const sentAt = Number(this.pendingPings.get(nonce));
+                this.pendingPings.delete(nonce);
+                const rtt = performance.now() - sentAt;
+                this.game.onPingUpdated(rtt);
+            }
+            return;
+        }
+
         if (message.type === 'auth_error' || message.type === 'auth_ok') {
             this.game.onAuthMessage(message);
             return;
@@ -199,5 +217,26 @@ export class Network {
             this.game.onHotbarState(message);
             return;
         }
+    }
+
+    startPingLoop() {
+        this.stopPingLoop();
+        this.sendPing();
+        this.pingTimer = setInterval(() => this.sendPing(), this.pingIntervalMs);
+    }
+
+    stopPingLoop() {
+        if (this.pingTimer) {
+            clearInterval(this.pingTimer);
+            this.pingTimer = null;
+        }
+        this.pendingPings.clear();
+    }
+
+    sendPing() {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        const nonce = ++this.lastPingNonce;
+        this.pendingPings.set(nonce, performance.now());
+        this.socket.send(JSON.stringify({ type: 'ping', nonce }));
     }
 }

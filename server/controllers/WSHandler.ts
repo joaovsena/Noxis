@@ -25,6 +25,15 @@ export class WSHandler {
             return;
         }
 
+        if (msg.type === 'ping') {
+            try {
+                ws.send(JSON.stringify({ type: 'pong', nonce: (msg as any).nonce ?? null, serverTime: Date.now() }));
+            } catch {
+                // noop
+            }
+            return;
+        }
+
         if (!ws.playerId || !this.controller.players.has(ws.playerId)) {
             if (msg.type.startsWith('auth_')) {
                 this.controller.handleAuth(ws, msg as any);

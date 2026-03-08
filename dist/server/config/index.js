@@ -1,7 +1,7 @@
 "use strict";
 // @ts-check
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CLASS_TEMPLATES = exports.STATUS_BY_ID = exports.STATUS_IDS = exports.SKILL_RESET_HOURGLASS_DROP_CHANCE = exports.SKILL_RESET_HOURGLASS_TEMPLATE = exports.HP_POTION_TEMPLATE = exports.WEAPON_TEMPLATES = exports.WEAPON_TEMPLATE_RUBI = exports.WEAPON_TEMPLATE = exports.PARTY_JOIN_REQUEST_TTL_MS = exports.PARTY_INVITE_TTL_MS = exports.PARTY_MAX_MEMBERS = exports.COMBAT_LOCK_MS = exports.GROUND_ITEM_TTL_MS = exports.ITEM_PICKUP_RANGE = exports.MOB_VARIANTS = exports.DEFAULT_MOB = exports.PORTALS_BY_MAP_KEY = exports.MAP_KEY_BY_CODE = exports.MAP_CODE_BY_KEY = exports.MAP_FEATURES_BY_KEY = exports.MAP_THEMES = exports.MOB_ATTACK_INTERVAL_MS = exports.MOB_ATTACK_RANGE = exports.MOB_LEASH_RANGE = exports.MOB_AGGRO_RANGE = exports.PORTAL_COOLDOWN_MS = exports.LOCAL_CHAT_RADIUS = exports.PLAYER_HALF_SIZE = exports.BASE_MOVE_SPEED = exports.MOB_RESPAWN_MS = exports.INVENTORY_SIZE = exports.MOB_COUNTS = exports.TICK_MS = exports.DEFAULT_MAP_KEY = exports.DEFAULT_MAP_ID = exports.MAP_IDS = exports.MAP_KEYS = exports.INSTANCE_IDS = exports.WORLD = void 0;
+exports.CLASS_TEMPLATES = exports.STATUS_BY_ID = exports.STATUS_IDS = exports.SKILL_RESET_HOURGLASS_DROP_CHANCE = exports.BUILTIN_ITEM_TEMPLATE_BY_ID = exports.BUILTIN_ITEM_TEMPLATES = exports.SKILL_RESET_HOURGLASS_TEMPLATE = exports.HP_POTION_TEMPLATE = exports.WEAPON_TEMPLATES = exports.WEAPON_TEMPLATE_RUBI = exports.WEAPON_TEMPLATE = exports.PARTY_JOIN_REQUEST_TTL_MS = exports.PARTY_INVITE_TTL_MS = exports.PARTY_MAX_MEMBERS = exports.COMBAT_LOCK_MS = exports.GROUND_ITEM_TTL_MS = exports.ITEM_PICKUP_RANGE = exports.MOB_VARIANTS = exports.DEFAULT_MOB = exports.PORTALS_BY_MAP_KEY = exports.MAP_KEY_BY_CODE = exports.MAP_CODE_BY_KEY = exports.MAP_FEATURES_BY_KEY = exports.MAP_THEMES = exports.MOB_ATTACK_INTERVAL_MS = exports.MOB_ATTACK_RANGE = exports.MOB_LEASH_RANGE = exports.MOB_AGGRO_RANGE = exports.PORTAL_COOLDOWN_MS = exports.LOCAL_CHAT_RADIUS = exports.PLAYER_HALF_SIZE = exports.BASE_MOVE_SPEED = exports.MOB_RESPAWN_MS = exports.INVENTORY_SIZE = exports.MOB_COUNTS = exports.TICK_MS = exports.DEFAULT_MAP_KEY = exports.DEFAULT_MAP_ID = exports.MAP_IDS = exports.MAP_KEYS = exports.INSTANCE_IDS = exports.WORLD = void 0;
 exports.mapCodeFromKey = mapCodeFromKey;
 exports.composeMapInstanceId = composeMapInstanceId;
 exports.WORLD = { width: 3200, height: 3200 };
@@ -117,6 +117,8 @@ exports.PARTY_MAX_MEMBERS = 5;
 exports.PARTY_INVITE_TTL_MS = 30000;
 exports.PARTY_JOIN_REQUEST_TTL_MS = 30000;
 exports.WEAPON_TEMPLATE = {
+    id: 'weapon_teste',
+    type: 'weapon',
     name: 'Arma Teste',
     slot: 'weapon',
     bonuses: {
@@ -127,6 +129,8 @@ exports.WEAPON_TEMPLATE = {
     }
 };
 exports.WEAPON_TEMPLATE_RUBI = {
+    id: 'weapon_rubi',
+    type: 'weapon',
     name: 'Arma de Rubi',
     slot: 'weapon',
     bonuses: {
@@ -138,17 +142,35 @@ exports.WEAPON_TEMPLATE_RUBI = {
 };
 exports.WEAPON_TEMPLATES = [exports.WEAPON_TEMPLATE, exports.WEAPON_TEMPLATE_RUBI];
 exports.HP_POTION_TEMPLATE = {
+    id: 'potion_hp',
+    type: 'potion_hp',
     name: 'Pocao de HP',
     slot: 'consumable',
-    healPercent: 0.5
+    healPercent: 0.5,
+    stackable: true,
+    maxStack: 64
 };
 exports.SKILL_RESET_HOURGLASS_TEMPLATE = {
+    id: 'skill_reset_hourglass',
     type: 'skill_reset_hourglass',
     name: 'Ampulheta de Habilidades',
     slot: 'consumable',
     stackable: true,
     maxStack: 64
 };
+exports.BUILTIN_ITEM_TEMPLATES = [
+    exports.WEAPON_TEMPLATE,
+    exports.WEAPON_TEMPLATE_RUBI,
+    exports.HP_POTION_TEMPLATE,
+    exports.SKILL_RESET_HOURGLASS_TEMPLATE
+];
+exports.BUILTIN_ITEM_TEMPLATE_BY_ID = exports.BUILTIN_ITEM_TEMPLATES.reduce((acc, template) => {
+    if (template?.id)
+        acc[String(template.id)] = template;
+    if (template?.type)
+        acc[String(template.type)] = template;
+    return acc;
+}, {});
 exports.SKILL_RESET_HOURGLASS_DROP_CHANCE = 0.5;
 exports.STATUS_IDS = {
     physicalAttack: 1,

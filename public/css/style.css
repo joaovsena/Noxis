@@ -422,6 +422,21 @@ button:hover {
     font-size: clamp(12px, calc(13px * var(--hud-scale)), 15px);
 }
 
+.hud-perf {
+    position: absolute;
+    z-index: 26;
+    top: calc(var(--hud-gap) - 16px);
+    left: var(--hud-gap);
+    padding: 2px 8px;
+    font-size: 11px;
+    letter-spacing: 0.2px;
+    color: #e7f5ff;
+    background: rgba(6, 11, 17, 0.9);
+    border: 1px solid #3d4f65;
+    border-radius: 6px;
+    backdrop-filter: blur(2px);
+}
+
 .hud-card {
     top: var(--hud-gap);
     left: var(--hud-gap);

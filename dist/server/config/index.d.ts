@@ -94,6 +94,8 @@ export declare const PARTY_MAX_MEMBERS = 5;
 export declare const PARTY_INVITE_TTL_MS = 30000;
 export declare const PARTY_JOIN_REQUEST_TTL_MS = 30000;
 export declare const WEAPON_TEMPLATE: {
+    id: string;
+    type: string;
     name: string;
     slot: string;
     bonuses: {
@@ -104,6 +106,8 @@ export declare const WEAPON_TEMPLATE: {
     };
 };
 export declare const WEAPON_TEMPLATE_RUBI: {
+    id: string;
+    type: string;
     name: string;
     slot: string;
     bonuses: {
@@ -114,6 +118,8 @@ export declare const WEAPON_TEMPLATE_RUBI: {
     };
 };
 export declare const WEAPON_TEMPLATES: {
+    id: string;
+    type: string;
     name: string;
     slot: string;
     bonuses: {
@@ -124,17 +130,42 @@ export declare const WEAPON_TEMPLATES: {
     };
 }[];
 export declare const HP_POTION_TEMPLATE: {
+    id: string;
+    type: string;
     name: string;
     slot: string;
     healPercent: number;
+    stackable: boolean;
+    maxStack: number;
 };
 export declare const SKILL_RESET_HOURGLASS_TEMPLATE: {
+    id: string;
     type: string;
     name: string;
     slot: string;
     stackable: boolean;
     maxStack: number;
 };
+export declare const BUILTIN_ITEM_TEMPLATES: ({
+    id: string;
+    type: string;
+    name: string;
+    slot: string;
+    bonuses: {
+        physicalAttack: number;
+        magicAttack: number;
+        moveSpeed: number;
+        attackSpeed: number;
+    };
+} | {
+    id: string;
+    type: string;
+    name: string;
+    slot: string;
+    stackable: boolean;
+    maxStack: number;
+})[];
+export declare const BUILTIN_ITEM_TEMPLATE_BY_ID: Record<string, any>;
 export declare const SKILL_RESET_HOURGLASS_DROP_CHANCE = 0.5;
 export declare const STATUS_IDS: {
     physicalAttack: number;

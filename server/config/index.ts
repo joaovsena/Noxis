@@ -151,6 +151,8 @@ export const PARTY_MAX_MEMBERS = 5;
 export const PARTY_INVITE_TTL_MS = 30000;
 export const PARTY_JOIN_REQUEST_TTL_MS = 30000;
 export const WEAPON_TEMPLATE = {
+    id: 'weapon_teste',
+    type: 'weapon',
     name: 'Arma Teste',
     slot: 'weapon',
     bonuses: {
@@ -161,6 +163,8 @@ export const WEAPON_TEMPLATE = {
     }
 };
 export const WEAPON_TEMPLATE_RUBI = {
+    id: 'weapon_rubi',
+    type: 'weapon',
     name: 'Arma de Rubi',
     slot: 'weapon',
     bonuses: {
@@ -172,17 +176,33 @@ export const WEAPON_TEMPLATE_RUBI = {
 };
 export const WEAPON_TEMPLATES = [WEAPON_TEMPLATE, WEAPON_TEMPLATE_RUBI];
 export const HP_POTION_TEMPLATE = {
+    id: 'potion_hp',
+    type: 'potion_hp',
     name: 'Pocao de HP',
     slot: 'consumable',
-    healPercent: 0.5
+    healPercent: 0.5,
+    stackable: true,
+    maxStack: 64
 };
 export const SKILL_RESET_HOURGLASS_TEMPLATE = {
+    id: 'skill_reset_hourglass',
     type: 'skill_reset_hourglass',
     name: 'Ampulheta de Habilidades',
     slot: 'consumable',
     stackable: true,
     maxStack: 64
 };
+export const BUILTIN_ITEM_TEMPLATES = [
+    WEAPON_TEMPLATE,
+    WEAPON_TEMPLATE_RUBI,
+    HP_POTION_TEMPLATE,
+    SKILL_RESET_HOURGLASS_TEMPLATE
+];
+export const BUILTIN_ITEM_TEMPLATE_BY_ID = BUILTIN_ITEM_TEMPLATES.reduce((acc: Record<string, any>, template: any) => {
+    if (template?.id) acc[String(template.id)] = template;
+    if (template?.type) acc[String(template.type)] = template;
+    return acc;
+}, {});
 export const SKILL_RESET_HOURGLASS_DROP_CHANCE = 0.5;
 export const STATUS_IDS = {
     physicalAttack: 1,

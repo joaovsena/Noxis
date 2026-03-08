@@ -38,9 +38,11 @@ import {
     MOB_ATTACK_INTERVAL_MS,
     HP_POTION_TEMPLATE,
     SKILL_RESET_HOURGLASS_TEMPLATE,
-    SKILL_RESET_HOURGLASS_DROP_CHANCE
+    SKILL_RESET_HOURGLASS_DROP_CHANCE,
+    BUILTIN_ITEM_TEMPLATE_BY_ID
 } from '../config';
 import { logEvent } from '../utils/logger';
+import { getForestTiledCollisionSampler } from '../maps/tiledForestCollision';
 
 interface Party {
     id: string;
@@ -1070,7 +1072,7 @@ export class GameController {
                 this.sendRaw(player.ws, { type: 'admin_result', ok: false, message: 'Item/quantia/jogador invalido.' });
                 return;
             }
-            const template = await this.persistence.getItemById(itemId);
+            const template = (await this.persistence.getItemById(itemId)) || (BUILTIN_ITEM_TEMPLATE_BY_ID[itemId] ?? null);
             if (!template) {
                 this.sendRaw(player.ws, { type: 'admin_result', ok: false, message: `Item ${itemId} nao encontrado.` });
                 return;
@@ -1082,11 +1084,15 @@ export class GameController {
                 if (slot === -1) break;
                 target.inventory.push({
                     id: randomUUID(),
-                    templateId: template.id,
-                    type: template.type,
+                    templateId: String(template.id || template.type || itemId),
+                    type: String(template.type || 'misc'),
                     name: template.name,
                     slot: template.slot,
-                    bonuses: template.bonuses,
+                    bonuses: template.bonuses || {},
+                    quantity: Number(template.stackable ? 1 : 1),
+                    stackable: Boolean(template.stackable),
+                    maxStack: Number(template.maxStack || 1),
+                    healPercent: Number.isFinite(Number(template.healPercent)) ? Number(template.healPercent) : undefined,
                     slotIndex: slot
                 });
                 added += 1;
@@ -3096,10 +3102,12 @@ export class GameController {
     }
 
     private isPathBlockedAt(mapKey: string, x: number, y: number, radiusOverride?: number) {
-        const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         const px = clamp(x, 0, WORLD.width);
         const py = clamp(y, 0, WORLD.height);
         const radius = Number.isFinite(Number(radiusOverride)) ? Number(radiusOverride) : PATH_PROBE_RADIUS;
+        const tiledSampler = this.getMapTiledCollisionSampler(mapKey);
+        if (tiledSampler && tiledSampler.isBlockedAt(px, py, radius)) return true;
+        const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         for (const feature of features) {
             if (!feature.collision) continue;
             if (feature.shape === 'rect') {
@@ -3211,10 +3219,12 @@ export class GameController {
     }
 
     private isBlockedAt(mapKey: string, x: number, y: number) {
-        const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         const px = clamp(x, 0, WORLD.width);
         const py = clamp(y, 0, WORLD.height);
         const radius = Math.max(8, PLAYER_HALF_SIZE - 6) + MOVE_COLLISION_PADDING;
+        const tiledSampler = this.getMapTiledCollisionSampler(mapKey);
+        if (tiledSampler && tiledSampler.isBlockedAt(px, py, radius)) return true;
+        const features = MAP_FEATURES_BY_KEY[mapKey] || [];
         for (const feature of features) {
             if (!feature.collision) continue;
             if (feature.shape === 'rect') {
@@ -3228,6 +3238,11 @@ export class GameController {
             if (dx * dx + dy * dy <= (feature.r + radius) * (feature.r + radius)) return true;
         }
         return false;
+    }
+
+    private getMapTiledCollisionSampler(mapKey: string) {
+        if (mapKey === 'forest') return getForestTiledCollisionSampler();
+        return null;
     }
 
     private projectToWalkable(mapKey: string, x: number, y: number) {
@@ -3370,7 +3385,8 @@ export class GameController {
     private dropWeaponAt(x: number, y: number, mapId: string, template: any = WEAPON_TEMPLATE) {
         this.groundItems.push({
             id: randomUUID(),
-            type: 'weapon',
+            templateId: String(template.id || template.type || 'weapon_teste'),
+            type: String(template.type || 'weapon'),
             name: template.name,
             slot: template.slot,
             bonuses: { ...template.bonuses },
@@ -3384,13 +3400,14 @@ export class GameController {
     private dropHpPotionAt(x: number, y: number, mapId: string) {
         this.groundItems.push({
             id: randomUUID(),
-            type: 'potion_hp',
+            templateId: String(HP_POTION_TEMPLATE.id || HP_POTION_TEMPLATE.type || 'potion_hp'),
+            type: String(HP_POTION_TEMPLATE.type || 'potion_hp'),
             name: HP_POTION_TEMPLATE.name,
             slot: HP_POTION_TEMPLATE.slot,
             bonuses: {},
             quantity: 1,
-            stackable: true,
-            maxStack: 64,
+            stackable: Boolean(HP_POTION_TEMPLATE.stackable ?? true),
+            maxStack: Number(HP_POTION_TEMPLATE.maxStack || 64),
             healPercent: Number(HP_POTION_TEMPLATE.healPercent || 0.5),
             x,
             y,
@@ -3402,6 +3419,7 @@ export class GameController {
     private dropSkillResetHourglassAt(x: number, y: number, mapId: string) {
         this.groundItems.push({
             id: randomUUID(),
+            templateId: String(SKILL_RESET_HOURGLASS_TEMPLATE.id || SKILL_RESET_HOURGLASS_TEMPLATE.type || 'skill_reset_hourglass'),
             type: SKILL_RESET_HOURGLASS_TEMPLATE.type,
             name: SKILL_RESET_HOURGLASS_TEMPLATE.name,
             slot: SKILL_RESET_HOURGLASS_TEMPLATE.slot,

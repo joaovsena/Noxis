@@ -15,5 +15,5 @@
     "sourceMap": true
   },
   "include": ["server/**/*", "tests/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "server/maps/**/*.tsx"]
 }

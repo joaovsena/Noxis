@@ -43,6 +43,7 @@ export class Game {
         this.panelClassChip = document.getElementById('panel-class-chip');
 
         this.playerCard = document.getElementById('player-card');
+        this.perfHud = document.getElementById('perf-hud');
         this.playerAvatar = document.getElementById('player-avatar');
         this.playerName = document.getElementById('player-name');
         this.playerPvpToggle = document.getElementById('player-pvp-toggle');
@@ -250,8 +251,25 @@ export class Game {
         this.mapRows = 0;
         this.mapTiles = null;
         this.mapVisualTheme = '';
+        this.tiledMapLayouts = {};
+        this.tiledMapLoadState = {};
+        this.tiledTilesets = {};
+        this.tiledTilesetLoadState = {};
+        this.tiledRenderCache = {};
         this.forestDecor = [];
         this.minimapViewSize = 1850;
+        this.minimapLastDrawAt = 0;
+        this.worldmapLastDrawAt = 0;
+        this.minimapDrawIntervalMs = 120;
+        this.worldmapDrawIntervalMs = 140;
+        this.fpsWindowStartAt = 0;
+        this.fpsFrameCount = 0;
+        this.fpsValue = 0;
+        this.networkPingMs = null;
+        this.perfHudLastPaintAt = 0;
+        this.perfHudPaintIntervalMs = 250;
+        this.perfHudDirty = true;
+        this.loadTiledMapLayout('A1');
         this.ensureForestMap();
         this.setPartyTab('area');
         this.renderPartyPanel();
@@ -1027,6 +1045,7 @@ export class Game {
 
         if (this.menu) this.menu.hide();
         this.canvas.style.display = 'block';
+        if (this.perfHud) this.perfHud.classList.remove('hidden');
         this.playerCard.classList.remove('hidden');
         this.minimapWrap.classList.remove('hidden');
         this.chatWrap.classList.remove('hidden');
@@ -1041,6 +1060,13 @@ export class Game {
         }
         this.updateAdminMapSettings();
         this.resize();
+        this.minimapLastDrawAt = 0;
+        this.worldmapLastDrawAt = 0;
+        this.fpsWindowStartAt = 0;
+        this.fpsFrameCount = 0;
+        this.fpsValue = 0;
+        this.perfHudDirty = true;
+        this.refreshPerformanceHud(true);
 
         if (!this.started) {
             this.started = true;
@@ -1087,6 +1113,7 @@ export class Game {
         this.pendingPartyInvites = [];
         this.pendingPartyJoinRequests = [];
         this.partyWaypoints = [];
+        this.onPingUpdated(null);
         this.friendsState = { friends: [], incoming: [], outgoing: [] };
         this.resetPendingStatAllocation();
         this.isDead = false;
@@ -1104,6 +1131,11 @@ export class Game {
         this.renderFriendNotifications();
         this.localId = null;
         this.canvas.style.display = 'none';
+        if (this.perfHud) this.perfHud.classList.add('hidden');
+        this.fpsWindowStartAt = 0;
+        this.fpsFrameCount = 0;
+        this.fpsValue = 0;
+        this.perfHudDirty = true;
         this.playerCard.classList.add('hidden');
         this.minimapWrap.classList.add('hidden');
         this.chatWrap.classList.add('hidden');
@@ -1113,6 +1145,12 @@ export class Game {
             this.menu.showLogin();
             this.menu.setStatus('Conexao encerrada.', true);
         }
+    }
+
+    onPingUpdated(pingMs) {
+        this.networkPingMs = Number.isFinite(Number(pingMs)) ? Math.max(0, Number(pingMs)) : null;
+        this.perfHudDirty = true;
+        this.refreshPerformanceHud(true);
     }
 
     resetSessionUiState() {
@@ -1515,10 +1553,9 @@ export class Game {
         const rect = this.canvas.getBoundingClientRect();
         const sx = this.canvas.width / Math.max(1, rect.width);
         const sy = this.canvas.height / Math.max(1, rect.height);
-        return {
-            x: (event.clientX - rect.left) * sx + this.camera.x,
-            y: (event.clientY - rect.top) * sy + this.camera.y
-        };
+        const renderX = (event.clientX - rect.left) * sx + this.camera.x;
+        const renderY = (event.clientY - rect.top) * sy + this.camera.y;
+        return this.renderToWorldCoords(renderX, renderY);
     }
 
     /**
@@ -1528,10 +1565,9 @@ export class Game {
         const rect = this.canvas.getBoundingClientRect();
         const sx = this.canvas.width / Math.max(1, rect.width);
         const sy = this.canvas.height / Math.max(1, rect.height);
-        return {
-            x: (clientX - rect.left) * sx + this.camera.x,
-            y: (clientY - rect.top) * sy + this.camera.y
-        };
+        const renderX = (clientX - rect.left) * sx + this.camera.x;
+        const renderY = (clientY - rect.top) * sy + this.camera.y;
+        return this.renderToWorldCoords(renderX, renderY);
     }
 
     getMinimapWorldRect() {
@@ -1540,10 +1576,11 @@ export class Game {
         if (!me) {
             return { x: 0, y: 0, w: viewSize, h: viewSize };
         }
+        const focus = this.worldToRenderCoords(me.x, me.y);
         const half = viewSize / 2;
         return {
-            x: Math.max(0, Math.min(this.mapWidth - viewSize, me.x - half)),
-            y: Math.max(0, Math.min(this.mapHeight - viewSize, me.y - half)),
+            x: Math.max(0, Math.min(this.mapWidth - viewSize, focus.x - half)),
+            y: Math.max(0, Math.min(this.mapHeight - viewSize, focus.y - half)),
             w: viewSize,
             h: viewSize
         };
@@ -1555,10 +1592,9 @@ export class Game {
         const localY = Math.max(0, Math.min(rect.height, clientY - rect.top));
         const nx = rect.width > 0 ? localX / rect.width : 0;
         const ny = rect.height > 0 ? localY / rect.height : 0;
-        return {
-            x: worldRect.x + nx * worldRect.w,
-            y: worldRect.y + ny * worldRect.h
-        };
+        const renderX = worldRect.x + nx * worldRect.w;
+        const renderY = worldRect.y + ny * worldRect.h;
+        return this.renderToWorldCoords(renderX, renderY);
     }
 
     handleMinimapClick(clientX, clientY) {
@@ -2782,6 +2818,7 @@ export class Game {
         if (message.mapTheme) this.currentMapTheme = message.mapTheme;
         this.mapFeatures = Array.isArray(message.mapFeatures) ? message.mapFeatures : [];
         this.mapPortals = Array.isArray(message.portals) ? message.portals : [];
+        if (this.currentMapCode) this.loadTiledMapLayout(this.currentMapCode);
         this.ensureForestMap();
 
         this.syncPlayers(message.players || {});
@@ -2789,6 +2826,186 @@ export class Game {
         this.syncGroundItems(message.groundItems || []);
         this.updatePlayerCard();
         this.updateTargetPlayerCard();
+    }
+
+    hasTiledLayout(mapCode = this.currentMapCode) {
+        const code = String(mapCode || '').toUpperCase();
+        return Boolean(this.tiledMapLayouts && this.tiledMapLayouts[code]);
+    }
+
+    hasTiledTileset(mapCode = this.currentMapCode) {
+        const code = String(mapCode || '').toUpperCase();
+        return Boolean(this.tiledTilesets && this.tiledTilesets[code] && this.tiledTilesets[code].tileImagesById);
+    }
+
+    shouldRenderTiledMap() {
+        return this.currentMapCode === 'A1' && this.hasTiledLayout('A1') && this.hasTiledTileset('A1');
+    }
+
+    isIsometricMap() {
+        const layout = this.tiledMapLayouts?.A1;
+        return this.currentMapCode === 'A1' && String(layout?.orientation || '').toLowerCase() === 'isometric';
+    }
+
+    getIsoProjectionConfig() {
+        const layout = this.tiledMapLayouts?.A1;
+        if (!layout || !this.isIsometricMap()) return null;
+        const mapW = Math.max(1, Number(layout.width || 1));
+        const mapH = Math.max(1, Number(layout.height || 1));
+        const tileW = Math.max(1, Number(layout.tilewidth || 1));
+        const tileH = Math.max(1, Number(layout.tileheight || 1));
+        const halfW = tileW / 2;
+        const halfH = tileH / 2;
+        const span = Math.max(1, mapW + mapH - 2);
+        const isoW = span * halfW;
+        const isoH = span * halfH;
+        const scale = Math.min(this.mapWidth / Math.max(1, isoW), this.mapHeight / Math.max(1, isoH));
+        const projectedW = isoW * scale;
+        const projectedH = isoH * scale;
+        const offsetX = (this.mapWidth - projectedW) * 0.5;
+        const offsetY = (this.mapHeight - projectedH) * 0.5;
+        return {
+            mapW,
+            mapH,
+            tileW,
+            tileH,
+            halfW,
+            halfH,
+            scale,
+            offsetX,
+            offsetY
+        };
+    }
+
+    worldToRenderCoords(worldX, worldY) {
+        if (!this.isIsometricMap()) return { x: worldX, y: worldY };
+        const cfg = this.getIsoProjectionConfig();
+        if (!cfg) return { x: worldX, y: worldY };
+        const nx = (Math.max(0, Math.min(this.mapWidth, Number(worldX || 0))) / Math.max(1, this.mapWidth)) * Math.max(1, cfg.mapW - 1);
+        const ny = (Math.max(0, Math.min(this.mapHeight, Number(worldY || 0))) / Math.max(1, this.mapHeight)) * Math.max(1, cfg.mapH - 1);
+        const isoX = (nx - ny) * cfg.halfW;
+        const isoY = (nx + ny) * cfg.halfH;
+        const minIsoX = -(Math.max(1, cfg.mapH - 1) * cfg.halfW);
+        return {
+            x: (isoX - minIsoX) * cfg.scale + cfg.offsetX,
+            y: isoY * cfg.scale + cfg.offsetY
+        };
+    }
+
+    renderToWorldCoords(renderX, renderY) {
+        if (!this.isIsometricMap()) {
+            return {
+                x: Math.max(0, Math.min(this.mapWidth, Number(renderX || 0))),
+                y: Math.max(0, Math.min(this.mapHeight, Number(renderY || 0)))
+            };
+        }
+        const cfg = this.getIsoProjectionConfig();
+        if (!cfg) {
+            return {
+                x: Math.max(0, Math.min(this.mapWidth, Number(renderX || 0))),
+                y: Math.max(0, Math.min(this.mapHeight, Number(renderY || 0)))
+            };
+        }
+        const minIsoX = -(Math.max(1, cfg.mapH - 1) * cfg.halfW);
+        const isoX = ((Number(renderX || 0) - cfg.offsetX) / Math.max(0.0001, cfg.scale)) + minIsoX;
+        const isoY = (Number(renderY || 0) - cfg.offsetY) / Math.max(0.0001, cfg.scale);
+        const nx = (isoY / Math.max(0.0001, cfg.halfH) + isoX / Math.max(0.0001, cfg.halfW)) * 0.5;
+        const ny = (isoY / Math.max(0.0001, cfg.halfH) - isoX / Math.max(0.0001, cfg.halfW)) * 0.5;
+        return {
+            x: Math.max(0, Math.min(this.mapWidth, (nx / Math.max(1, cfg.mapW - 1)) * this.mapWidth)),
+            y: Math.max(0, Math.min(this.mapHeight, (ny / Math.max(1, cfg.mapH - 1)) * this.mapHeight))
+        };
+    }
+
+    async loadTiledMapLayout(mapCode = this.currentMapCode) {
+        const code = String(mapCode || '').toUpperCase();
+        if (!code || this.tiledMapLayouts[code]) return;
+        if (this.tiledMapLoadState[code] === 'loading' || this.tiledMapLoadState[code] === 'failed') return;
+        if (code !== 'A1') return;
+
+        this.tiledMapLoadState[code] = 'loading';
+        try {
+            const response = await fetch(`/maps/${code}/a1.tmj`, { cache: 'no-store' });
+            if (!response.ok) throw new Error(`http_${response.status}`);
+            const tmj = await response.json();
+            const width = Math.max(1, Math.floor(Number(tmj?.width || 0)));
+            const height = Math.max(1, Math.floor(Number(tmj?.height || 0)));
+            const tilewidth = Math.max(1, Number(tmj?.tilewidth || 1));
+            const tileheight = Math.max(1, Number(tmj?.tileheight || 1));
+            const orientation = String(tmj?.orientation || '');
+            const layers = Array.isArray(tmj?.layers)
+                ? tmj.layers.filter((layer) => layer?.type === 'tilelayer' && Array.isArray(layer?.data))
+                : [];
+            const tilesets = Array.isArray(tmj?.tilesets) ? tmj.tilesets : [];
+            if (!width || !height || !layers.length) throw new Error('invalid_tmj');
+
+            this.tiledMapLayouts[code] = { width, height, tilewidth, tileheight, orientation, layers, tilesets };
+            await this.loadTiledTilesetForMap(code, tmj, '/maps/A1/a1.tmj');
+            delete this.tiledRenderCache[code];
+            this.tiledMapLoadState[code] = 'ready';
+            if (this.currentMapCode === code) {
+                this.mapTiles = null;
+                this.ensureForestMap();
+            }
+        } catch {
+            this.tiledMapLoadState[code] = 'failed';
+        }
+    }
+
+    async loadTiledTilesetForMap(mapCode, tmj, tmjUrl) {
+        const code = String(mapCode || '').toUpperCase();
+        if (this.tiledTilesetLoadState[code] === 'loading' || this.tiledTilesetLoadState[code] === 'ready') return;
+        const tsRef = Array.isArray(tmj?.tilesets) ? tmj.tilesets[0] : null;
+        const source = String(tsRef?.source || '');
+        if (!source) return;
+
+        this.tiledTilesetLoadState[code] = 'loading';
+        try {
+            const tsxUrl = new URL(source, `https://noxis.local${tmjUrl}`).pathname;
+            const response = await fetch(tsxUrl, { cache: 'no-store' });
+            if (!response.ok) throw new Error(`http_${response.status}`);
+            const tsx = await response.text();
+            const parsedTileset = this.parseTsxTileImages(tsx);
+            this.tiledTilesets[code] = {
+                ...parsedTileset,
+                firstgid: Math.max(1, Number(tsRef?.firstgid || 1))
+            };
+            delete this.tiledRenderCache[code];
+            this.tiledTilesetLoadState[code] = 'ready';
+        } catch {
+            this.tiledTilesetLoadState[code] = 'failed';
+        }
+    }
+
+    parseTsxTileImages(tsxText) {
+        const out = {};
+        const text = String(tsxText || '');
+        const tileOffsetMatch = text.match(/<tileoffset\s+x="(-?\d+)"\s+y="(-?\d+)"/);
+        const tilesetTileWidthMatch = text.match(/tilewidth="(\d+)"/);
+        const tilesetTileHeightMatch = text.match(/tileheight="(\d+)"/);
+        const tileoffsetX = tileOffsetMatch ? Number(tileOffsetMatch[1] || 0) : 0;
+        const tileoffsetY = tileOffsetMatch ? Number(tileOffsetMatch[2] || 0) : 0;
+        const tilesetTileWidth = tilesetTileWidthMatch ? Number(tilesetTileWidthMatch[1] || 1) : 1;
+        const tilesetTileHeight = tilesetTileHeightMatch ? Number(tilesetTileHeightMatch[1] || 1) : 1;
+        const tileBlockRegex = /<tile\s+id="(\d+)"[\s\S]*?<\/tile>/g;
+        let match = tileBlockRegex.exec(text);
+        while (match) {
+            const localId = Math.floor(Number(match[1]));
+            const block = String(match[0] || '');
+            const imageMatch = block.match(/<image\s+source="([^"]+)"/);
+            if (imageMatch && imageMatch[1]) {
+                const source = String(imageMatch[1]);
+                const basename = source.split('/').pop()?.split('\\').pop();
+                if (basename) {
+                    const img = new Image();
+                    img.src = `/maps/tileset/a1/${basename}`;
+                    img.onload = () => { delete this.tiledRenderCache.A1; };
+                    out[localId] = img;
+                }
+            }
+            match = tileBlockRegex.exec(text);
+        }
+        return { tileImagesById: out, tileoffsetX, tileoffsetY, tilesetTileWidth, tilesetTileHeight };
     }
 
     /**
@@ -3766,8 +3983,8 @@ export class Game {
         if (!nodes.length) return;
         const points = [{ x: me.x, y: me.y }, ...nodes];
         this.drawPolyline(ctx, points, 'rgba(123, 230, 255, 0.95)', 2, (point) => ({
-            x: (point.x - worldRect.x) * sx,
-            y: (point.y - worldRect.y) * sy
+            x: (this.worldToRenderCoords(point.x, point.y).x - worldRect.x) * sx,
+            y: (this.worldToRenderCoords(point.x, point.y).y - worldRect.y) * sy
         }));
     }
 
@@ -3781,16 +3998,18 @@ export class Game {
             ctx.strokeStyle = 'rgba(255, 70, 70, 0.95)';
             ctx.lineWidth = 1;
             if (feature.shape === 'rect') {
-                const x = (Number(feature.x) - worldRect.x) * sx;
-                const y = (Number(feature.y) - worldRect.y) * sy;
+                const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
+                const x = (projected.x - worldRect.x) * sx;
+                const y = (projected.y - worldRect.y) * sy;
                 const w = Number(feature.w) * sx;
                 const h = Number(feature.h) * sy;
                 ctx.strokeRect(x, y, w, h);
             } else if (feature.shape === 'circle') {
+                const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
                 ctx.beginPath();
                 ctx.arc(
-                    (Number(feature.x) - worldRect.x) * sx,
-                    (Number(feature.y) - worldRect.y) * sy,
+                    (projected.x - worldRect.x) * sx,
+                    (projected.y - worldRect.y) * sy,
                     Number(feature.r) * Math.min(sx, sy),
                     0,
                     Math.PI * 2
@@ -3803,14 +4022,15 @@ export class Game {
         if (nodes.length) {
             const points = [{ x: me.x, y: me.y }, ...nodes];
             this.drawPolyline(ctx, points, 'rgba(255, 90, 220, 0.95)', 1.5, (point) => ({
-                x: (point.x - worldRect.x) * sx,
-                y: (point.y - worldRect.y) * sy
+                x: (this.worldToRenderCoords(point.x, point.y).x - worldRect.x) * sx,
+                y: (this.worldToRenderCoords(point.x, point.y).y - worldRect.y) * sy
             }));
         }
 
         if (this.lastMoveSent) {
-            const mx = (this.lastMoveSent.x - worldRect.x) * sx;
-            const my = (this.lastMoveSent.y - worldRect.y) * sy;
+            const projected = this.worldToRenderCoords(this.lastMoveSent.x, this.lastMoveSent.y);
+            const mx = (projected.x - worldRect.x) * sx;
+            const my = (projected.y - worldRect.y) * sy;
             ctx.strokeStyle = 'rgba(80, 220, 255, 0.95)';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(mx - 4, my - 4, 8, 8);
@@ -3926,6 +4146,16 @@ export class Game {
         const rows = Math.max(1, Math.ceil(this.mapHeight / this.tileSize));
         const theme = this.currentMapTheme || 'forest';
         if (this.mapTiles && this.mapCols === cols && this.mapRows === rows && this.mapVisualTheme === theme) return;
+
+        if (this.currentMapCode === 'A1' && this.hasTiledLayout('A1')) {
+            const tiled = this.tiledMapLayouts.A1;
+            this.mapCols = cols;
+            this.mapRows = rows;
+            this.mapVisualTheme = theme;
+            this.mapTiles = this.buildTilesFromTiledLayout(tiled, cols, rows);
+            this.forestDecor = [];
+            return;
+        }
 
         this.mapCols = cols;
         this.mapRows = rows;
@@ -4133,6 +4363,7 @@ export class Game {
     }
 
     drawMapFeatures(ctx, worldRect, sx = 1, sy = 1, previewMode = false) {
+        if (this.currentMapCode === 'A1' && this.hasTiledLayout('A1')) return;
         if (!Array.isArray(this.mapFeatures) || !this.mapFeatures.length) return;
         for (const feature of this.mapFeatures) {
             const kind = String(feature.kind || '');
@@ -4253,33 +4484,37 @@ export class Game {
         ctx.fillStyle = '#101620';
         ctx.fillRect(0, 0, w, h);
 
-        const tileStartCol = Math.max(0, Math.floor(worldRect.x / this.tileSize));
-        const tileEndCol = Math.min(this.mapCols - 1, Math.ceil((worldRect.x + worldRect.w) / this.tileSize));
-        const tileStartRow = Math.max(0, Math.floor(worldRect.y / this.tileSize));
-        const tileEndRow = Math.min(this.mapRows - 1, Math.ceil((worldRect.y + worldRect.h) / this.tileSize));
-
         const sx = w / Math.max(1, worldRect.w);
         const sy = h / Math.max(1, worldRect.h);
+        if (this.shouldRenderTiledMap()) {
+            this.drawTiledTerrain(ctx, worldRect, sx, sy);
+        } else {
+            const tileStartCol = Math.max(0, Math.floor(worldRect.x / this.tileSize));
+            const tileEndCol = Math.min(this.mapCols - 1, Math.ceil((worldRect.x + worldRect.w) / this.tileSize));
+            const tileStartRow = Math.max(0, Math.floor(worldRect.y / this.tileSize));
+            const tileEndRow = Math.min(this.mapRows - 1, Math.ceil((worldRect.y + worldRect.h) / this.tileSize));
 
-        for (let row = tileStartRow; row <= tileEndRow; row++) {
-            for (let col = tileStartCol; col <= tileEndCol; col++) {
-                const tile = this.mapTiles[row * this.mapCols + col];
-                ctx.fillStyle = this.getTileColor(tile);
+            for (let row = tileStartRow; row <= tileEndRow; row++) {
+                for (let col = tileStartCol; col <= tileEndCol; col++) {
+                    const tile = this.mapTiles[row * this.mapCols + col];
+                    ctx.fillStyle = this.getTileColor(tile);
 
-                const worldX = col * this.tileSize;
-                const worldY = row * this.tileSize;
-                const px = (worldX - worldRect.x) * sx;
-                const py = (worldY - worldRect.y) * sy;
-                const pw = this.tileSize * sx;
-                const ph = this.tileSize * sy;
-                ctx.fillRect(px, py, pw + 0.7, ph + 0.7);
+                    const worldX = col * this.tileSize;
+                    const worldY = row * this.tileSize;
+                    const px = (worldX - worldRect.x) * sx;
+                    const py = (worldY - worldRect.y) * sy;
+                    const pw = this.tileSize * sx;
+                    const ph = this.tileSize * sy;
+                    ctx.fillRect(px, py, pw + 0.7, ph + 0.7);
+                }
             }
         }
         this.drawMapFeatures(ctx, worldRect, sx, sy, true);
 
         for (const portal of this.mapPortals) {
-            const cx = (portal.x + portal.w * 0.5 - worldRect.x) * sx;
-            const cy = (portal.y + portal.h * 0.5 - worldRect.y) * sy;
+            const projected = this.worldToRenderCoords(portal.x + portal.w * 0.5, portal.y + portal.h * 0.5);
+            const cx = (projected.x - worldRect.x) * sx;
+            const cy = (projected.y - worldRect.y) * sy;
             const radius = Math.max(4, Math.min(portal.w * sx, portal.h * sy) * 0.24);
             const visible = cx + radius >= 0 && cy + radius >= 0 && cx - radius <= w && cy - radius <= h;
             if (!visible) continue;
@@ -4288,35 +4523,38 @@ export class Game {
 
         for (const id of Object.keys(this.mobs)) {
             const mob = this.mobs[id];
-            if (mob.x < worldRect.x || mob.x > worldRect.x + worldRect.w || mob.y < worldRect.y || mob.y > worldRect.y + worldRect.h) continue;
+            const projected = this.worldToRenderCoords(mob.x, mob.y);
+            if (projected.x < worldRect.x || projected.x > worldRect.x + worldRect.w || projected.y < worldRect.y || projected.y > worldRect.y + worldRect.h) continue;
             const kind = String(mob.kind || 'normal');
             ctx.fillStyle = kind === 'boss'
                 ? '#111111'
                 : kind === 'subboss'
                     ? '#8e44ad'
-                    : kind === 'elite'
-                        ? '#e67e22'
-                        : '#d63031';
+                        : kind === 'elite'
+                            ? '#e67e22'
+                            : '#d63031';
             ctx.beginPath();
-            ctx.arc((mob.x - worldRect.x) * sx, (mob.y - worldRect.y) * sy, 2.5, 0, Math.PI * 2);
+            ctx.arc((projected.x - worldRect.x) * sx, (projected.y - worldRect.y) * sy, 2.5, 0, Math.PI * 2);
             ctx.fill();
         }
 
         for (const id of Object.keys(this.players)) {
             const p = this.players[id];
-            if (p.x < worldRect.x || p.x > worldRect.x + worldRect.w || p.y < worldRect.y || p.y > worldRect.y + worldRect.h) continue;
+            const projected = this.worldToRenderCoords(p.x, p.y);
+            if (projected.x < worldRect.x || projected.x > worldRect.x + worldRect.w || projected.y < worldRect.y || projected.y > worldRect.y + worldRect.h) continue;
             ctx.fillStyle = id === this.localId ? '#ffffff' : '#4da3ff';
             ctx.beginPath();
-            ctx.arc((p.x - worldRect.x) * sx, (p.y - worldRect.y) * sy, 2.8, 0, Math.PI * 2);
+            ctx.arc((projected.x - worldRect.x) * sx, (projected.y - worldRect.y) * sy, 2.8, 0, Math.PI * 2);
             ctx.fill();
         }
 
         this.pruneExpiredPartyWaypoints();
         for (const ping of this.partyWaypoints) {
             if (ping.mapKey !== this.currentMapKey || ping.mapId !== this.currentMapId) continue;
-            if (ping.x < worldRect.x || ping.x > worldRect.x + worldRect.w || ping.y < worldRect.y || ping.y > worldRect.y + worldRect.h) continue;
-            const px = (ping.x - worldRect.x) * sx;
-            const py = (ping.y - worldRect.y) * sy;
+            const projected = this.worldToRenderCoords(ping.x, ping.y);
+            if (projected.x < worldRect.x || projected.x > worldRect.x + worldRect.w || projected.y < worldRect.y || projected.y > worldRect.y + worldRect.h) continue;
+            const px = (projected.x - worldRect.x) * sx;
+            const py = (projected.y - worldRect.y) * sy;
             ctx.strokeStyle = '#f6d04d';
             ctx.lineWidth = 2;
             ctx.beginPath();
@@ -4355,13 +4593,17 @@ export class Game {
     /**
      * Desenha minimapa em forma de recorte local (fragmento ao redor do player).
      */
-    drawMinimap() {
+    drawMinimap(now = performance.now()) {
+        if (now - this.minimapLastDrawAt < this.minimapDrawIntervalMs) return;
+        this.minimapLastDrawAt = now;
         const worldRect = this.getMinimapWorldRect();
         this.drawWorldPreview(this.minimapCtx, this.minimapCanvas, worldRect, false);
     }
 
-    drawWorldMapPanel() {
+    drawWorldMapPanel(now = performance.now()) {
         if (this.worldmapPanel.classList.contains('hidden')) return;
+        if (now - this.worldmapLastDrawAt < this.worldmapDrawIntervalMs) return;
+        this.worldmapLastDrawAt = now;
         const worldRect = { x: 0, y: 0, w: this.mapWidth, h: this.mapHeight };
         this.drawWorldPreview(this.worldmapCtx, this.worldmapCanvas, worldRect, false);
     }
@@ -4477,6 +4719,131 @@ export class Game {
         }
     }
 
+    buildTilesFromTiledLayout(layout, targetCols, targetRows) {
+        const srcW = Math.max(1, Number(layout?.width || 1));
+        const srcH = Math.max(1, Number(layout?.height || 1));
+        const layers = Array.isArray(layout?.layers) ? layout.layers : [];
+        const out = new Uint8Array(targetCols * targetRows);
+
+        for (let y = 0; y < targetRows; y++) {
+            for (let x = 0; x < targetCols; x++) {
+                const sx = Math.max(0, Math.min(srcW - 1, Math.floor((x / Math.max(1, targetCols - 1)) * (srcW - 1))));
+                const sy = Math.max(0, Math.min(srcH - 1, Math.floor((y / Math.max(1, targetRows - 1)) * (srcH - 1))));
+                const srcIndex = sy * srcW + sx;
+
+                let depth = 0;
+                for (let i = 0; i < layers.length; i++) {
+                    const data = layers[i]?.data;
+                    if (!data) continue;
+                    if (Number(data[srcIndex] || 0) > 0) depth += 1;
+                }
+
+                let tileType = 0;
+                if (depth >= 4) tileType = 1;
+                else if (depth >= 2) tileType = 2;
+                else if (depth >= 1) tileType = 0;
+                out[y * targetCols + x] = tileType;
+            }
+        }
+
+        return out;
+    }
+
+    drawTiledTerrain(ctx, worldRect, sx = 1, sy = 1) {
+        const cache = this.ensureTiledRenderCache('A1');
+        if (!cache || !cache.canvas) return false;
+        const srcX = Math.max(0, Math.floor(worldRect.x));
+        const srcY = Math.max(0, Math.floor(worldRect.y));
+        const srcW = Math.max(1, Math.min(cache.canvas.width - srcX, Math.ceil(worldRect.w)));
+        const srcH = Math.max(1, Math.min(cache.canvas.height - srcY, Math.ceil(worldRect.h)));
+        ctx.drawImage(cache.canvas, srcX, srcY, srcW, srcH, 0, 0, srcW * sx, srcH * sy);
+        return true;
+    }
+
+    isoGridToRenderCoords(col, row, cfg = this.getIsoProjectionConfig()) {
+        if (!cfg) return { x: 0, y: 0 };
+        const isoX = (col - row) * cfg.halfW;
+        const isoY = (col + row) * cfg.halfH;
+        const minIsoX = -(Math.max(1, cfg.mapH - 1) * cfg.halfW);
+        return {
+            x: (isoX - minIsoX) * cfg.scale + cfg.offsetX,
+            y: isoY * cfg.scale + cfg.offsetY
+        };
+    }
+
+    ensureTiledRenderCache(mapCode = this.currentMapCode) {
+        const code = String(mapCode || '').toUpperCase();
+        if (!this.shouldRenderTiledMap() || code !== 'A1') return null;
+        const cached = this.tiledRenderCache[code];
+        if (cached?.ready && cached.canvas) return cached;
+
+        const layout = this.tiledMapLayouts[code];
+        const tileset = this.tiledTilesets[code];
+        const cfg = this.getIsoProjectionConfig();
+        if (!layout || !tileset || !cfg) return null;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.ceil(this.mapWidth));
+        canvas.height = Math.max(1, Math.ceil(this.mapHeight));
+        const cctx = canvas.getContext('2d');
+        cctx.imageSmoothingEnabled = false;
+
+        const mapW = Math.max(1, Number(layout.width || 1));
+        const mapH = Math.max(1, Number(layout.height || 1));
+        const firstgid = Math.max(1, Number(tileset.firstgid || 1));
+        const gidMask = 0x1fffffff;
+        const layers = Array.isArray(layout.layers) ? layout.layers : [];
+        const tileImagesById = tileset.tileImagesById || {};
+        const tileImageList = Object.values(tileImagesById);
+        if (!tileImageList.length) return null;
+        const allReady = tileImageList.every((img) => img && img.complete && img.naturalWidth && img.naturalHeight);
+        if (!allReady) return null;
+        const tileoffsetX = Number(tileset.tileoffsetX || 0);
+        const tileoffsetY = Number(tileset.tileoffsetY || 0);
+        const tilesetTileWidth = Math.max(1, Number(tileset.tilesetTileWidth || layout.tilewidth || 1));
+        const tilesetTileHeight = Math.max(1, Number(tileset.tilesetTileHeight || layout.tileheight || 1));
+        const spriteScale = cfg.scale * (Number(layout.tilewidth || tilesetTileWidth) / Math.max(1, tilesetTileWidth));
+
+        for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+            const layer = layers[layerIndex];
+            if (layer && layer.visible === false) continue;
+            const data = layer?.data;
+            if (!Array.isArray(data)) continue;
+            const opacity = Math.max(0, Math.min(1, Number(layer?.opacity ?? 1)));
+            if (opacity <= 0) continue;
+            cctx.save();
+            cctx.globalAlpha = opacity;
+            const layerOffsetX = Number(layer?.offsetx || 0) * cfg.scale;
+            const layerOffsetY = Number(layer?.offsety || 0) * cfg.scale;
+
+            for (let row = 0; row < mapH; row++) {
+                for (let col = 0; col < mapW; col++) {
+                    const idx = row * mapW + col;
+                    const raw = Number(data[idx] || 0) >>> 0;
+                    if (!raw) continue;
+                    const gid = raw & gidMask;
+                    if (!gid || gid < firstgid) continue;
+                    const localId = gid - firstgid;
+                    const img = tileImagesById[localId];
+                    if (!img || !img.complete || !img.naturalWidth || !img.naturalHeight) continue;
+
+                    const projected = this.isoGridToRenderCoords(col, row, cfg);
+                    const drawW = img.naturalWidth * spriteScale;
+                    const drawH = img.naturalHeight * spriteScale;
+                    const offsetX = tileoffsetX * spriteScale;
+                    const offsetY = tileoffsetY * spriteScale;
+                    const dx = projected.x - drawW * 0.5 + offsetX + layerOffsetX;
+                    const dy = projected.y - drawH + (tilesetTileHeight * spriteScale) + offsetY + layerOffsetY;
+                    cctx.drawImage(img, dx, dy, drawW, drawH);
+                }
+            }
+            cctx.restore();
+        }
+
+        this.tiledRenderCache[code] = { ready: true, canvas };
+        return this.tiledRenderCache[code];
+    }
+
     updateHudLayout() {
         const w = Number(window.innerWidth || this.baseRenderWidth || 1366);
         const h = Number(window.innerHeight || this.baseRenderHeight || 768);
@@ -4584,11 +4951,42 @@ export class Game {
      * Inicia loop de renderização do cliente.
      */
     startLoop() {
-        const loop = () => {
-            this.draw();
+        const loop = (now) => {
+            this.draw(Number(now || performance.now()));
             requestAnimationFrame(loop);
         };
-        loop();
+        requestAnimationFrame(loop);
+    }
+
+    updatePerformanceMetrics(now) {
+        if (!Number.isFinite(now)) return;
+        if (!this.fpsWindowStartAt) {
+            this.fpsWindowStartAt = now;
+            this.fpsFrameCount = 0;
+        }
+        this.fpsFrameCount += 1;
+        const elapsed = now - this.fpsWindowStartAt;
+        if (elapsed < 500) return;
+        this.fpsValue = Math.round((this.fpsFrameCount * 1000) / Math.max(1, elapsed));
+        this.fpsWindowStartAt = now;
+        this.fpsFrameCount = 0;
+        this.perfHudDirty = true;
+    }
+
+    refreshPerformanceHud(force = false, now = performance.now()) {
+        if (!this.perfHud) return;
+        if (!this.localId) {
+            this.perfHud.classList.add('hidden');
+            return;
+        }
+        this.perfHud.classList.remove('hidden');
+        const due = now - this.perfHudLastPaintAt >= this.perfHudPaintIntervalMs;
+        if (!force && !this.perfHudDirty && !due) return;
+        const fpsLabel = Number.isFinite(Number(this.fpsValue)) && this.fpsValue > 0 ? String(this.fpsValue) : '--';
+        const pingLabel = Number.isFinite(Number(this.networkPingMs)) ? `${Math.round(Number(this.networkPingMs))}ms` : '--';
+        this.perfHud.textContent = `FPS ${fpsLabel} | Ping ${pingLabel}`;
+        this.perfHudLastPaintAt = now;
+        this.perfHudDirty = false;
     }
 
     /**
@@ -4596,6 +4994,26 @@ export class Game {
      */
     drawMap() {
         this.ensureForestMap();
+        if (this.shouldRenderTiledMap()) {
+            const worldRect = {
+                x: this.camera.x,
+                y: this.camera.y,
+                w: this.canvas.width,
+                h: this.canvas.height
+            };
+            const rendered = this.drawTiledTerrain(this.ctx, worldRect, 1, 1);
+            if (rendered) {
+                this.drawMapFeatures(this.ctx, worldRect, 1, 1, false);
+                for (const portal of this.mapPortals) {
+                    const projected = this.worldToRenderCoords(portal.x + portal.w * 0.5, portal.y + portal.h * 0.5);
+                    const sx = projected.x - this.camera.x;
+                    const sy = projected.y - this.camera.y;
+                    const radius = Math.max(8, Math.min(portal.w, portal.h) * 0.24);
+                    this.drawPixelPortal(this.ctx, sx, sy, radius, 3);
+                }
+                return;
+            }
+        }
         const cols = Math.ceil(this.canvas.width / this.tileSize) + 1;
         const rows = Math.ceil(this.canvas.height / this.tileSize) + 1;
         const startCol = Math.floor(this.camera.x / this.tileSize);
@@ -4688,9 +5106,10 @@ export class Game {
         for (const portal of this.mapPortals) {
             const cx = portal.x + portal.w * 0.5;
             const cy = portal.y + portal.h * 0.5;
-            if (cx < viewLeft || cx > viewRight || cy < viewTop || cy > viewBottom) continue;
-            const sx = cx - this.camera.x;
-            const sy = cy - this.camera.y;
+            const portalPos = this.worldToRenderCoords(cx, cy);
+            if (portalPos.x < viewLeft || portalPos.x > viewRight || portalPos.y < viewTop || portalPos.y > viewBottom) continue;
+            const sx = portalPos.x - this.camera.x;
+            const sy = portalPos.y - this.camera.y;
             const radius = Math.max(8, Math.min(portal.w, portal.h) * 0.24);
             this.drawPixelPortal(this.ctx, sx, sy, radius, 3);
         }
@@ -4703,8 +5122,9 @@ export class Game {
         const now = Date.now();
         for (const id of Object.keys(this.mobs)) {
             const mob = this.mobs[id];
-            let screenX = mob.x - this.camera.x;
-            let screenY = mob.y - this.camera.y;
+            const projected = this.worldToRenderCoords(mob.x, mob.y);
+            let screenX = projected.x - this.camera.x;
+            let screenY = projected.y - this.camera.y;
             if (mob.hitAnim && mob.hitAnim.until > now) {
                 screenX += mob.hitAnim.ox;
                 screenY += mob.hitAnim.oy;
@@ -4809,8 +5229,9 @@ export class Game {
     drawGroundItems() {
         for (const id of Object.keys(this.groundItems)) {
             const item = this.groundItems[id];
-            const screenX = item.x - this.camera.x;
-            const screenY = item.y - this.camera.y;
+            const projected = this.worldToRenderCoords(item.x, item.y);
+            const screenX = projected.x - this.camera.x;
+            const screenY = projected.y - this.camera.y;
 
             this.ctx.fillStyle = '#c0392b';
             this.ctx.fillRect(screenX - 10, screenY - 8, 20, 14);
@@ -4831,8 +5252,9 @@ export class Game {
         const now = Date.now();
         for (const id of Object.keys(this.players)) {
             const p = this.players[id];
-            let screenX = p.x - this.camera.x;
-            let screenY = p.y - this.camera.y;
+            const projected = this.worldToRenderCoords(p.x, p.y);
+            let screenX = projected.x - this.camera.x;
+            let screenY = projected.y - this.camera.y;
             if (p.hitAnim && p.hitAnim.until > now) {
                 screenX += p.hitAnim.ox;
                 screenY += p.hitAnim.oy;
@@ -5234,8 +5656,9 @@ export class Game {
             const life = Math.max(0, Math.min(1, (now - fx.startedAt) / Math.max(1, fx.expiresAt - fx.startedAt)));
             const alpha = 1 - life;
             const radius = 18 + life * 28;
-            const sx = fx.x - this.camera.x;
-            const sy = fx.y - this.camera.y;
+            const projected = this.worldToRenderCoords(fx.x, fx.y);
+            const sx = projected.x - this.camera.x;
+            const sy = projected.y - this.camera.y;
             let color = '120,190,255';
             const key = String(fx.effectKey || '');
             if (key.startsWith('war_')) color = '230,180,80';
@@ -5269,8 +5692,9 @@ export class Game {
             const t = Math.max(0, Math.min(1, (now - projectile.startedAt) / Math.max(1, projectile.expiresAt - projectile.startedAt)));
             const worldX = projectile.fromX + (projectile.toX - projectile.fromX) * t;
             const worldY = projectile.fromY + (projectile.toY - projectile.fromY) * t;
-            const sx = worldX - this.camera.x;
-            const sy = worldY - this.camera.y;
+            const projected = this.worldToRenderCoords(worldX, worldY);
+            const sx = projected.x - this.camera.x;
+            const sy = projected.y - this.camera.y;
             this.ctx.fillStyle = projectile.color || '#7dd3fc';
             this.ctx.beginPath();
             this.ctx.arc(sx, sy, 4, 0, Math.PI * 2);
@@ -5292,27 +5716,30 @@ export class Game {
         this.ctx.save();
 
         // Contorno das areas de colisao configuradas no mapa.
-        for (const feature of this.mapFeatures || []) {
-            if (!feature || !feature.collision) continue;
-            this.ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';
-            this.ctx.lineWidth = 2;
-            if (feature.shape === 'rect') {
+        if (!(this.currentMapCode === 'A1' && this.hasTiledLayout('A1'))) {
+            for (const feature of this.mapFeatures || []) {
+                if (!feature || !feature.collision) continue;
+                this.ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';
+                this.ctx.lineWidth = 2;
+                if (feature.shape === 'rect') {
                 this.ctx.strokeRect(
-                    Number(feature.x) - this.camera.x,
-                    Number(feature.y) - this.camera.y,
+                    this.worldToRenderCoords(Number(feature.x), Number(feature.y)).x - this.camera.x,
+                    this.worldToRenderCoords(Number(feature.x), Number(feature.y)).y - this.camera.y,
                     Number(feature.w),
                     Number(feature.h)
                 );
             } else if (feature.shape === 'circle') {
+                const projected = this.worldToRenderCoords(Number(feature.x), Number(feature.y));
                 this.ctx.beginPath();
                 this.ctx.arc(
-                    Number(feature.x) - this.camera.x,
-                    Number(feature.y) - this.camera.y,
+                    projected.x - this.camera.x,
+                    projected.y - this.camera.y,
                     Number(feature.r),
                     0,
                     Math.PI * 2
                 );
                 this.ctx.stroke();
+                }
             }
         }
 
@@ -5321,8 +5748,8 @@ export class Game {
         if (nodes.length) {
             const points = [{ x: me.x, y: me.y }, ...nodes];
             this.drawPolyline(this.ctx, points, 'rgba(255, 90, 220, 0.95)', 3, (pt) => ({
-                x: pt.x - this.camera.x,
-                y: pt.y - this.camera.y
+                x: this.worldToRenderCoords(pt.x, pt.y).x - this.camera.x,
+                y: this.worldToRenderCoords(pt.x, pt.y).y - this.camera.y
             }));
         }
 
@@ -5330,9 +5757,10 @@ export class Game {
         if (this.lastMoveSent) {
             this.ctx.strokeStyle = 'rgba(80, 220, 255, 0.95)';
             this.ctx.lineWidth = 2;
+            const projected = this.worldToRenderCoords(this.lastMoveSent.x, this.lastMoveSent.y);
             this.ctx.strokeRect(
-                this.lastMoveSent.x - this.camera.x - 6,
-                this.lastMoveSent.y - this.camera.y - 6,
+                projected.x - this.camera.x - 6,
+                projected.y - this.camera.y - 6,
                 12,
                 12
             );
@@ -5377,15 +5805,17 @@ export class Game {
     /**
      * Render principal de cada frame.
      */
-    draw() {
+    draw(now = performance.now()) {
+        this.updatePerformanceMetrics(now);
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.smoothEntities();
         this.processPendingPickup();
 
         if (this.localId && this.players[this.localId]) {
             const me = this.players[this.localId];
-            this.camera.x = me.x - this.canvas.width / 2;
-            this.camera.y = me.y - this.canvas.height / 2;
+            const focus = this.worldToRenderCoords(me.x, me.y);
+            this.camera.x = focus.x - this.canvas.width / 2;
+            this.camera.y = focus.y - this.canvas.height / 2;
             this.camera.x = Math.max(0, Math.min(this.camera.x, this.mapWidth - this.canvas.width));
             this.camera.y = Math.max(0, Math.min(this.camera.y, this.mapHeight - this.canvas.height));
         }
@@ -5399,8 +5829,9 @@ export class Game {
         this.drawPlayers();
         this.drawSkillEffects();
         this.drawCombatProjectiles();
-        this.drawMinimap();
-        this.drawWorldMapPanel();
+        this.drawMinimap(now);
+        this.drawWorldMapPanel(now);
+        this.refreshPerformanceHud(false, now);
 
         if (this.lastMoveAck) {
             this.ctx.fillStyle = '#fff';

@@ -79,6 +79,7 @@ export interface Mob {
 }
 export interface GroundItem {
     id: string;
+    templateId?: string;
     type: string;
     name: string;
     slot: string;
@@ -279,5 +280,9 @@ export interface HotbarSetMessage {
     type: 'hotbar.set';
     bindings: Record<string, any>;
 }
-export type WSMessage = AuthMessage | CharacterCreateMessage | CharacterEnterMessage | MoveMessage | TargetMobMessage | ChatMessage | PickupItemMessage | EquipItemMessage | EquipRequestMessage | InventoryMoveMessage | InventorySortMessage | InventoryDeleteMessage | InventoryUnequipToSlotMessage | ItemUseMessage | SwitchInstanceMessage | AdminCommandMessage | AdminSetMobPeacefulMessage | PartyCreateMessage | PartyInviteMessage | PartyAcceptInviteMessage | PartyDeclineInviteMessage | PartyLeaveMessage | PartyKickMessage | PartyPromoteMessage | PartyRequestAreaPartiesMessage | PartyRequestJoinMessage | PartyApproveJoinMessage | PartyWaypointPingMessage | FriendRequestMessage | FriendAcceptMessage | FriendDeclineMessage | FriendRemoveMessage | FriendListMessage | StatsAllocateMessage | PlayerSetPvpModeMessage | CombatAttackMessage | CombatTargetPlayerMessage | CombatClearTargetMessage | PlayerReviveMessage | SkillCastMessage | SkillLearnMessage | HotbarSetMessage;
+export interface PingMessage {
+    type: 'ping';
+    nonce?: number;
+}
+export type WSMessage = AuthMessage | CharacterCreateMessage | CharacterEnterMessage | MoveMessage | TargetMobMessage | ChatMessage | PickupItemMessage | EquipItemMessage | EquipRequestMessage | InventoryMoveMessage | InventorySortMessage | InventoryDeleteMessage | InventoryUnequipToSlotMessage | ItemUseMessage | SwitchInstanceMessage | AdminCommandMessage | AdminSetMobPeacefulMessage | PartyCreateMessage | PartyInviteMessage | PartyAcceptInviteMessage | PartyDeclineInviteMessage | PartyLeaveMessage | PartyKickMessage | PartyPromoteMessage | PartyRequestAreaPartiesMessage | PartyRequestJoinMessage | PartyApproveJoinMessage | PartyWaypointPingMessage | FriendRequestMessage | FriendAcceptMessage | FriendDeclineMessage | FriendRemoveMessage | FriendListMessage | StatsAllocateMessage | PlayerSetPvpModeMessage | CombatAttackMessage | CombatTargetPlayerMessage | CombatClearTargetMessage | PlayerReviveMessage | SkillCastMessage | SkillLearnMessage | HotbarSetMessage | PingMessage;
 //# sourceMappingURL=types.d.ts.map
