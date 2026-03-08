@@ -27,8 +27,8 @@ const PATHFIND_CELL_SIZE = 12;
 const PATHFIND_MAX_ITERS = 45000;
 const PATH_RECALC_MS = 280;
 const PATH_PROBE_RADIUS = Math.max(8, config_1.PLAYER_HALF_SIZE - 6);
-const PATH_STUCK_REPATH_MS = 260;
-const PATH_STUCK_TIMEOUT_MS = 450;
+const PATH_STUCK_REPATH_MS = 520;
+const PATH_STUCK_TIMEOUT_MS = 1200;
 const PATH_NEARBY_GOAL_MAX_CANDIDATES = 72;
 const PATH_NEARBY_GOAL_MAX_RADIUS = 42;
 const PROJECT_TO_WALKABLE_MAX_RADIUS = 420;
@@ -2066,15 +2066,6 @@ class GameController {
         if (!this.isBlockedAt(player.mapKey, player.x, axisY)) {
             player.y = axisY;
             return;
-        }
-        if (Array.isArray(player.movePath) && player.movePath.length > 0) {
-            player.movePath.shift();
-            const next = player.movePath[0];
-            if (next) {
-                player.targetX = next.x;
-                player.targetY = next.y;
-                return;
-            }
         }
         const destinationX = Number.isFinite(Number(player.pathDestinationX)) ? Number(player.pathDestinationX) : player.targetX;
         const destinationY = Number.isFinite(Number(player.pathDestinationY)) ? Number(player.pathDestinationY) : player.targetY;

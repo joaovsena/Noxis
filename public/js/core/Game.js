@@ -3320,11 +3320,25 @@ export class Game {
         const alpha = 1 - Math.exp(-18 * (dt / 1000));
         const lerp = Math.max(0.2, Math.min(0.7, alpha));
         const snap = Math.max(0.8, dt * 0.05);
+        const baseMoveSpeed = 140;
 
         for (const id of Object.keys(this.players)) {
             const p = this.players[id];
-            p.x += (p.targetX - p.x) * lerp;
-            p.y += (p.targetY - p.y) * lerp;
+            const dx = Number(p.targetX) - Number(p.x);
+            const dy = Number(p.targetY) - Number(p.y);
+            const dist = Math.hypot(dx, dy);
+            if (dist <= snap) {
+                p.x = p.targetX;
+                p.y = p.targetY;
+                continue;
+            }
+            const moveSpeedStat = Number.isFinite(Number(p?.stats?.moveSpeed)) ? Number(p.stats.moveSpeed) : 100;
+            const worldUnitsPerSec = baseMoveSpeed * Math.max(0.2, moveSpeedStat / 100);
+            const maxStep = Math.max(0.01, worldUnitsPerSec * (dt / 1000) * 1.15);
+            const blendedStep = Math.max(0.01, dist * lerp);
+            const step = Math.min(dist, Math.min(maxStep, blendedStep));
+            p.x += (dx / dist) * step;
+            p.y += (dy / dist) * step;
             if (Math.abs(p.targetX - p.x) < snap) p.x = p.targetX;
             if (Math.abs(p.targetY - p.y) < snap) p.y = p.targetY;
         }
