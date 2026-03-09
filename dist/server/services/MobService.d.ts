@@ -28,11 +28,17 @@ export declare class MobService {
     private pickNumber;
     private getTemplate;
     createMob(kind: string | undefined, mapId: string): Mob;
+    createMobWithOverrides(kind: string, mapId: string, overrides?: Partial<Mob>, options?: {
+        skipQuota?: boolean;
+        useSpawnFinder?: boolean;
+    }): Mob | null;
     private randomIdleDelay;
     private findValidSpawnPoint;
     spawnMob(kind: string | undefined, mapId: string): void;
     seedMapInstance(mapId: string): void;
-    removeMob(mobId: string): void;
+    removeMob(mobId: string, options?: {
+        skipRespawn?: boolean;
+    }): void;
     getMobs(): Mob[];
     getMobById(mobId: string): Mob | null;
     getMobsByMap(mapId: string): Mob[];

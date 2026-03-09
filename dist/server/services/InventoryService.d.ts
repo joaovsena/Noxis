@@ -8,6 +8,7 @@ type NormalizeHotbarBindingsFn = (raw: any) => any;
 type FirstFreeInventorySlotFn = (items: any[], ignoreItemIds?: Set<string>) => number;
 type GetSpentSkillPointsFn = (player: PlayerRuntime) => number;
 type SendRawFn = (ws: any, payload: any) => void;
+type ItemCollectedFn = (player: PlayerRuntime, templateId: string, quantity: number) => void;
 export declare class InventoryService {
     private readonly getGroundItems;
     private readonly setGroundItems;
@@ -20,7 +21,8 @@ export declare class InventoryService {
     private readonly firstFreeInventorySlot;
     private readonly getSpentSkillPoints;
     private readonly sendRaw;
-    constructor(getGroundItems: () => GroundItem[], setGroundItems: (items: GroundItem[]) => void, mapInstanceId: MapInstanceIdFn, persistPlayer: PersistPlayerFn, recomputePlayerStats: RecomputePlayerStatsFn, sendInventoryState: SendInventoryStateFn, sendStatsUpdated: SendStatsUpdatedFn, normalizeHotbarBindings: NormalizeHotbarBindingsFn, firstFreeInventorySlot: FirstFreeInventorySlotFn, getSpentSkillPoints: GetSpentSkillPointsFn, sendRaw: SendRawFn);
+    private readonly onItemCollected?;
+    constructor(getGroundItems: () => GroundItem[], setGroundItems: (items: GroundItem[]) => void, mapInstanceId: MapInstanceIdFn, persistPlayer: PersistPlayerFn, recomputePlayerStats: RecomputePlayerStatsFn, sendInventoryState: SendInventoryStateFn, sendStatsUpdated: SendStatsUpdatedFn, normalizeHotbarBindings: NormalizeHotbarBindingsFn, firstFreeInventorySlot: FirstFreeInventorySlotFn, getSpentSkillPoints: GetSpentSkillPointsFn, sendRaw: SendRawFn, onItemCollected?: ItemCollectedFn | undefined);
     handlePickupItem(player: PlayerRuntime, msg: any): void;
     handleHotbarSet(player: PlayerRuntime, msg: any): void;
     handleEquipItem(player: PlayerRuntime, msg: any): void;

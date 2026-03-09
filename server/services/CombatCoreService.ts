@@ -73,6 +73,15 @@ export class CombatCoreService {
         if (Math.random() < 0.5) dropDefs.push('weapon');
         dropDefs.push('potion_hp');
         if (Math.random() < Number(SKILL_RESET_HOURGLASS_DROP_CHANCE || 0)) dropDefs.push('skill_reset_hourglass');
+        if (Array.isArray(mob.eventLootTable)) {
+            for (const entry of mob.eventLootTable) {
+                const type = String(entry?.type || '') as 'weapon' | 'potion_hp' | 'skill_reset_hourglass';
+                const chance = Math.max(0, Math.min(1, Number(entry?.chance || 0)));
+                if ((type === 'weapon' || type === 'potion_hp' || type === 'skill_reset_hourglass') && Math.random() < chance) {
+                    dropDefs.push(type);
+                }
+            }
+        }
         dropDefs.forEach((dropType, index) => {
             const dropPos = this.computeLootDropPosition(mob.x, mob.y, index, dropDefs.length, player.mapKey);
             if (dropType === 'weapon') this.dropWeaponAt(dropPos.x, dropPos.y, mapInstanceId, this.pickRandomWeaponTemplate());

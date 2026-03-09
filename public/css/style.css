@@ -462,6 +462,79 @@ button:hover {
     font-size: 14px;
 }
 
+#quest-panel {
+    top: calc(var(--hud-gap) + 128px);
+    left: var(--hud-gap);
+    width: clamp(280px, calc(340px * var(--hud-scale)), 410px);
+    max-height: 320px;
+    overflow: auto;
+}
+
+#quest-header {
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+#quest-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.quest-entry {
+    border: 1px solid #3f4a59;
+    border-radius: 8px;
+    padding: 8px;
+    background: rgba(10, 15, 24, 0.75);
+}
+
+.quest-entry.ready {
+    border-color: #6b8f41;
+    background: rgba(24, 33, 18, 0.8);
+}
+
+.quest-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.quest-objective {
+    font-size: 12px;
+    color: #c8d4e6;
+}
+
+#npc-dialog-panel {
+    right: calc(var(--hud-gap) + 220px);
+    top: calc(var(--hud-gap) + 110px);
+    width: clamp(280px, calc(340px * var(--hud-scale)), 420px);
+    z-index: 42;
+}
+
+#npc-dialog-header {
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+#npc-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.npc-dialog-quest {
+    border: 1px solid #3f4a59;
+    border-radius: 8px;
+    padding: 8px;
+    background: rgba(10, 15, 24, 0.75);
+}
+
+.npc-dialog-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 #player-avatar {
     width: 52px;
     height: 52px;

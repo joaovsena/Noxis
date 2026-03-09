@@ -12,6 +12,8 @@ import { SkillEffectsService } from '../services/SkillEffectsService';
 import { SkillService } from '../services/SkillService';
 import { CombatRuntimeService } from '../services/CombatRuntimeService';
 import { CombatCoreService } from '../services/CombatCoreService';
+import { QuestService } from '../services/QuestService';
+import { EventService } from '../services/EventService';
 import { PlayerRuntime, GroundItem, AuthMessage, MoveMessage } from '../models/types';
 import { hashPassword } from '../utils/hash';
 import { clamp, distance, xpRequired } from '../utils/math';
@@ -189,6 +191,8 @@ export class GameController {
     private skillService: SkillService;
     private combatRuntimeService: CombatRuntimeService;
     private combatCoreService: CombatCoreService;
+    private questService: QuestService;
+    private eventService: EventService;
     players: Map<number, PlayerRuntime> = new Map();
     usernameToPlayerId: Map<string, number> = new Map();
     groundItems: GroundItem[] = [];
@@ -228,7 +232,19 @@ export class GameController {
             this.normalizeHotbarBindings.bind(this),
             this.firstFreeInventorySlot.bind(this),
             this.getSpentSkillPoints.bind(this),
-            this.sendRaw.bind(this)
+            this.sendRaw.bind(this),
+            this.onItemCollected.bind(this)
+        );
+        this.questService = new QuestService(
+            this.sendRaw.bind(this),
+            this.persistPlayer.bind(this),
+            this.grantXp.bind(this),
+            this.grantRewardItem.bind(this)
+        );
+        this.eventService = new EventService(
+            this.mobService,
+            this.broadcastMapInstance.bind(this),
+            this.projectToWalkable.bind(this)
         );
         this.skillEffectsService = new SkillEffectsService(this.players, this.sendRaw.bind(this));
         this.skillService = new SkillService(
@@ -525,6 +541,7 @@ export class GameController {
                 inventory: player.inventory,
                 equippedWeaponId: player.equippedWeaponId
             }));
+            this.questService.sendQuestState(player);
             ws.send(JSON.stringify(this.buildWorldSnapshot(player.mapId, player.mapKey)));
             this.sendPartyStateToPlayer(player, null);
             this.sendPartyAreaList(player);
@@ -1170,6 +1187,18 @@ export class GameController {
         this.skillService.handleSkillLearn(player, msg);
     }
 
+    handleNpcInteract(player: PlayerRuntime, msg: any) {
+        this.questService.handleNpcInteract(player, msg);
+    }
+
+    handleQuestAccept(player: PlayerRuntime, msg: any) {
+        this.questService.handleQuestAccept(player, msg);
+    }
+
+    handleQuestComplete(player: PlayerRuntime, msg: any) {
+        this.questService.handleQuestComplete(player, msg);
+    }
+
     handleToggleAfk(player: PlayerRuntime) {
         if (player.dead || player.hp <= 0) return;
         this.setAfkState(player, !Boolean(player.afkActive));
@@ -1260,6 +1289,7 @@ export class GameController {
     }
 
     tick(deltaSeconds: number, now: number) {
+        this.eventService.tick(now);
         this.pruneExpiredGroundItems(now);
         this.pruneExpiredPartyInvites(now);
         this.pruneExpiredPartyJoinRequests(now);
@@ -1298,6 +1328,8 @@ export class GameController {
             mapKey,
             mapTheme: MAP_THEMES[mapKey] || 'forest',
             mapFeatures: hasTiledCollision ? [] : (MAP_FEATURES_BY_KEY[mapKey] || []),
+            npcs: this.questService.getNpcsForMap(mapKey, mapId),
+            activeEvents: this.eventService.getActiveEventsForMap(mapKey, mapId),
             portals: PORTALS_BY_MAP_KEY[mapKey] || [],
             mapId,
             world: WORLD
@@ -1427,7 +1459,12 @@ export class GameController {
     }
 
     private applyDamageToMobAndHandleDeath(player: PlayerRuntime, mob: any, damage: number, now: number) {
-        return this.combatCoreService.applyDamageToMobAndHandleDeath(player, mob, damage, now);
+        const wasAlive = Boolean(mob && Number(mob.hp || 0) > 0);
+        const ok = this.combatCoreService.applyDamageToMobAndHandleDeath(player, mob, damage, now);
+        if (ok && wasAlive && mob && Number(mob.hp || 0) <= 0) {
+            this.questService.onMobKilled(player, mob);
+        }
+        return ok;
     }
 
     private pruneExpiredSkillEffects(player: PlayerRuntime, now: number = Date.now()) {
@@ -1751,6 +1788,28 @@ export class GameController {
 
     private addItemToInventory(player: PlayerRuntime, item: any, quantity: number) {
         return this.inventoryService.addItemToInventory(player, item, quantity);
+    }
+
+    private grantRewardItem(player: PlayerRuntime, templateId: string, quantity: number) {
+        const qty = Math.max(0, Math.floor(Number(quantity || 0)));
+        if (qty <= 0) return 0;
+        const key = String(templateId || '');
+        if (!key) return qty;
+        const template = key === 'potion_hp'
+            ? HP_POTION_TEMPLATE
+            : BUILTIN_ITEM_TEMPLATE_BY_ID[key];
+        if (!template) return qty;
+        const baseItem = {
+            ...template,
+            id: randomUUID()
+        };
+        const remaining = this.addItemToInventory(player, baseItem, qty);
+        this.sendInventoryState(player);
+        return remaining;
+    }
+
+    private onItemCollected(player: PlayerRuntime, templateId: string, quantity: number) {
+        this.questService.onItemCollected(player, templateId, quantity);
     }
 
     private pruneExpiredGroundItems(now: number) {
@@ -2093,6 +2152,13 @@ export class GameController {
 
     private broadcastRaw(payload: any) {
         for (const player of this.players.values()) {
+            this.sendRaw(player.ws, payload);
+        }
+    }
+
+    private broadcastMapInstance(mapKey: string, mapId: string, payload: any) {
+        for (const player of this.players.values()) {
+            if (player.mapKey !== mapKey || player.mapId !== mapId) continue;
             this.sendRaw(player.ws, payload);
         }
     }

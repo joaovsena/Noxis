@@ -123,6 +123,30 @@ export class MobService {
         };
     }
 
+    createMobWithOverrides(
+        kind: string,
+        mapId: string,
+        overrides: Partial<Mob> = {},
+        options: { skipQuota?: boolean; useSpawnFinder?: boolean } = {}
+    ): Mob | null {
+        const safeKind = String(kind || 'normal').toLowerCase();
+        if (!options.skipQuota) {
+            const quota = MOB_COUNTS[safeKind as keyof typeof MOB_COUNTS] || 0;
+            const current = this.mobs.filter((m) => m.kind === safeKind && m.mapId === mapId).length;
+            if (current >= quota) return null;
+        }
+        const base = this.createMob(safeKind, mapId);
+        const merged: Mob = {
+            ...base,
+            ...overrides,
+            id: String(overrides.id || base.id),
+            kind: String(overrides.kind || base.kind),
+            mapId: String(overrides.mapId || mapId)
+        };
+        this.mobs.push(merged);
+        return merged;
+    }
+
     private randomIdleDelay(template: MobTemplateRuntime) {
         const min = Math.max(0, Math.floor(template.idleMinMs));
         const max = Math.max(min, Math.floor(template.idleMaxMs));
@@ -163,10 +187,7 @@ export class MobService {
     }
 
     spawnMob(kind: string = 'normal', mapId: string): void {
-        const quota = MOB_COUNTS[kind as keyof typeof MOB_COUNTS] || 0;
-        const current = this.mobs.filter((m) => m.kind === kind && m.mapId === mapId).length;
-        if (current >= quota) return;
-        this.mobs.push(this.createMob(kind, mapId));
+        this.createMobWithOverrides(kind, mapId);
     }
 
     seedMapInstance(mapId: string) {
@@ -175,12 +196,14 @@ export class MobService {
         }
     }
 
-    removeMob(mobId: string): void {
+    removeMob(mobId: string, options: { skipRespawn?: boolean } = {}): void {
         const index = this.mobs.findIndex((m) => m.id === mobId);
         if (index === -1) return;
         const kind = this.mobs[index].kind;
         const mapId = this.mobs[index].mapId;
+        const noRespawn = Boolean(this.mobs[index].noRespawn);
         this.mobs.splice(index, 1);
+        if (options.skipRespawn || noRespawn) return;
         setTimeout(() => this.spawnMob(kind, mapId), MOB_RESPAWN_MS);
     }
 

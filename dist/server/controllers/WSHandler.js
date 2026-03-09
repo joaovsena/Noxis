@@ -156,6 +156,15 @@ class WSHandler {
             case 'skill.learn':
                 this.controller.handleSkillLearn(player, msg);
                 break;
+            case 'npc.interact':
+                this.controller.handleNpcInteract(player, msg);
+                break;
+            case 'quest.accept':
+                this.controller.handleQuestAccept(player, msg);
+                break;
+            case 'quest.complete':
+                this.controller.handleQuestComplete(player, msg);
+                break;
             case 'player.toggleAfk':
                 this.controller.handleToggleAfk(player);
                 break;

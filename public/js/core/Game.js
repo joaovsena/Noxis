@@ -15,6 +15,7 @@ export class Game {
         this.mobs = {};
         this.groundItems = {};
         this.hoveredMobId = null;
+        this.hoveredNpcId = null;
         this.selectedMobId = null;
         this.hoveredGroundItemId = null;
         this.pendingPickup = null;
@@ -158,6 +159,10 @@ export class Game {
         this.chatBubbles = {};
         this.combatProjectiles = [];
         this.skillEffects = [];
+        this.npcs = [];
+        this.questEntries = [];
+        this.pendingNpcDialog = null;
+        this.pendingNpcInteract = null;
 
         this.skillbarWrap = document.getElementById('skillbar-wrap');
         this.skillButtons = [...document.querySelectorAll('.skill-slot-btn')];
@@ -173,6 +178,7 @@ export class Game {
         this.menuAttrs = document.getElementById('menu-attrs');
         this.menuInventory = document.getElementById('menu-inventory');
         this.menuSkills = document.getElementById('menu-skills');
+        this.menuQuests = document.getElementById('menu-quests');
         this.instanceSelect = document.getElementById('instance-select');
         this.inventoryPanel = document.getElementById('inventory-panel');
         this.inventoryHeader = document.getElementById('inventory-header');
@@ -214,6 +220,12 @@ export class Game {
         this.adminCommand = document.getElementById('admin-command');
         this.adminSend = document.getElementById('admin-send');
         this.adminResult = document.getElementById('admin-result');
+        this.questPanel = document.getElementById('quest-panel');
+        this.questList = document.getElementById('quest-list');
+        this.npcDialogPanel = document.getElementById('npc-dialog-panel');
+        this.npcDialogHeader = document.getElementById('npc-dialog-header');
+        this.npcDialogBody = document.getElementById('npc-dialog-body');
+        this.npcDialogClose = document.getElementById('npc-dialog-close');
         this.playerRole = 'player';
         this.statusIds = {};
         this.selectedPlayerId = null;
@@ -328,11 +340,13 @@ export class Game {
         this.canvas.addEventListener('mousemove', (e) => {
             if (!this.localId) return;
             const world = this.toWorldCoords(e);
+            this.hoveredNpcId = this.getNpcAt(world.x, world.y);
             this.hoveredMobId = this.getMobAt(world.x, world.y);
             this.hoveredGroundItemId = this.getGroundItemAt(world.x, world.y);
             this.updateGroundItemCursor();
         });
         this.canvas.addEventListener('mouseleave', () => {
+            this.hoveredNpcId = null;
             this.hoveredGroundItemId = null;
             this.updateGroundItemCursor();
         });
@@ -340,6 +354,12 @@ export class Game {
         const handleWorldClick = (clientX, clientY) => {
             if (this.isDead) return;
             const world = this.toWorldCoordsFromClient(clientX, clientY);
+            const npcId = this.getNpcAt(world.x, world.y);
+            if (npcId) {
+                this.tryInteractNpc(npcId);
+                return;
+            }
+            this.cancelPendingNpcInteract();
             const itemId = this.getGroundItemAt(world.x, world.y) || this.getNearestGroundItemAt(world.x, world.y, 32);
             if (itemId) {
                 this.tryPickupGroundItem(itemId);
@@ -370,6 +390,8 @@ export class Game {
                 target.closest('#char-panel') ||
                 target.closest('#inventory-panel') ||
                 target.closest('#skills-panel') ||
+                target.closest('#quest-panel') ||
+                target.closest('#npc-dialog-panel') ||
                 target.closest('#player-card') ||
                 target.closest('#minimap-wrap') ||
                 target.closest('#map-settings-panel') ||
@@ -462,6 +484,13 @@ export class Game {
             if (isTypingInField()) return;
             if (e.key.toLowerCase() !== 'v') return;
             this.toggleSkillsPanel();
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (!this.localId) return;
+            if (isTypingInField()) return;
+            if (e.key.toLowerCase() !== 'j') return;
+            this.toggleQuestPanel();
         });
 
         window.addEventListener('keydown', (e) => {
@@ -563,6 +592,12 @@ export class Game {
                 this.toggleSkillsPanel();
             });
         }
+        if (this.menuQuests) {
+            this.menuQuests.addEventListener('click', () => {
+                if (!this.localId) return;
+                this.toggleQuestPanel();
+            });
+        }
         this.menuMap.addEventListener('click', () => {
             if (!this.localId) return;
             this.toggleWorldMapPanel();
@@ -575,6 +610,11 @@ export class Game {
             if (!this.localId) return;
             this.toggleFriendsPanel();
         });
+        if (this.npcDialogClose) {
+            this.npcDialogClose.addEventListener('click', () => {
+                if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
+            });
+        }
         this.instanceSelect.addEventListener('change', () => {
             if (!this.localId) return;
             this.network.send({ type: 'switch_instance', mapId: this.instanceSelect.value });
@@ -1061,7 +1101,7 @@ export class Game {
     sendMoveToWorld(x, y) {
         const clampedX = Math.max(0, Math.min(this.mapWidth, x));
         const clampedY = Math.max(0, Math.min(this.mapHeight, y));
-        this.cancelPendingPickup();
+        this.clearInteractivePendingStates();
         if (this.localId && this.players[this.localId]) {
             this.localMoveIntent = {
                 x: clampedX,
@@ -1158,6 +1198,8 @@ export class Game {
         this.chatWrap.classList.add('hidden');
         this.skillbarWrap.classList.add('hidden');
         this.menusWrap.classList.add('hidden');
+        if (this.questPanel) this.questPanel.classList.add('hidden');
+        if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
         this.charPanelName.textContent = '-';
         this.closeAllTooltips('session_reset');
         this.menu.showCharacterSelect(message);
@@ -1264,6 +1306,7 @@ export class Game {
         this.resetPendingStatAllocation();
         this.isDead = false;
         this.pendingPickup = null;
+        this.pendingNpcInteract = null;
         this.hoveredGroundItemId = null;
         this.skillEffects = [];
         this.resetHotbarBindingsToDefault();
@@ -1290,6 +1333,8 @@ export class Game {
         this.chatWrap.classList.add('hidden');
         this.skillbarWrap.classList.add('hidden');
         this.menusWrap.classList.add('hidden');
+        if (this.questPanel) this.questPanel.classList.add('hidden');
+        if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
         if (this.menu) {
             this.menu.showLogin();
             this.menu.setStatus(manual ? '' : 'Conexao encerrada.', !manual);
@@ -1311,7 +1356,11 @@ export class Game {
     resetSessionUiState() {
         this.players = {};
         this.mobs = {};
+        this.npcs = [];
         this.groundItems = {};
+        this.questEntries = [];
+        this.pendingNpcDialog = null;
+        this.pendingNpcInteract = null;
         if (this.afkStatus) this.afkStatus.classList.add('hidden');
         this.localMoveIntent = null;
         this.queuedMoveCommand = null;
@@ -1370,6 +1419,112 @@ export class Game {
         if (!this.localId) return;
         this.applyHotbarBindings(message?.bindings);
         this.renderHotbar();
+    }
+
+    onQuestState(message) {
+        this.questEntries = Array.isArray(message?.quests) ? message.quests : [];
+        this.renderQuestPanel();
+    }
+
+    onNpcDialog(message) {
+        this.pendingNpcDialog = message || null;
+        this.renderNpcDialog();
+    }
+
+    toggleQuestPanel() {
+        if (!this.questPanel) return;
+        this.questPanel.classList.toggle('hidden');
+        this.renderQuestPanel();
+    }
+
+    renderQuestPanel() {
+        if (!this.questList) return;
+        this.questList.innerHTML = '';
+        if (!Array.isArray(this.questEntries) || !this.questEntries.length) {
+            const empty = document.createElement('div');
+            empty.className = 'quest-entry';
+            empty.textContent = 'Nenhuma quest ativa.';
+            this.questList.appendChild(empty);
+            return;
+        }
+        for (const quest of this.questEntries) {
+            const card = document.createElement('div');
+            const ready = String(quest?.status || '') === 'ready';
+            card.className = `quest-entry${ready ? ' ready' : ''}`;
+            const title = document.createElement('div');
+            title.className = 'quest-title';
+            title.textContent = ready ? `${String(quest.title || 'Quest')} (Pronta)` : String(quest.title || 'Quest');
+            card.appendChild(title);
+            const desc = document.createElement('div');
+            desc.className = 'quest-objective';
+            desc.textContent = String(quest.description || '');
+            card.appendChild(desc);
+            if (Array.isArray(quest.objectives)) {
+                for (const obj of quest.objectives) {
+                    const line = document.createElement('div');
+                    line.className = 'quest-objective';
+                    const cur = Math.max(0, Number(obj.current || 0));
+                    const req = Math.max(1, Number(obj.required || 1));
+                    line.textContent = `- ${String(obj.text || 'Objetivo')}: ${cur}/${req}`;
+                    card.appendChild(line);
+                }
+            }
+            this.questList.appendChild(card);
+        }
+    }
+
+    renderNpcDialog() {
+        if (!this.npcDialogPanel || !this.npcDialogBody || !this.npcDialogHeader) return;
+        const payload = this.pendingNpcDialog;
+        if (!payload || !payload.npc) {
+            this.npcDialogPanel.classList.add('hidden');
+            return;
+        }
+        this.npcDialogHeader.textContent = String(payload.npc.name || 'NPC');
+        this.npcDialogBody.innerHTML = '';
+        const greeting = document.createElement('div');
+        greeting.className = 'quest-objective';
+        greeting.textContent = String(payload.npc.greeting || '...');
+        this.npcDialogBody.appendChild(greeting);
+        const all = Array.isArray(payload.quests) ? payload.quests : [];
+        for (const quest of all) {
+            const card = document.createElement('div');
+            card.className = 'npc-dialog-quest';
+            const title = document.createElement('div');
+            title.className = 'quest-title';
+            title.textContent = String(quest.title || 'Quest');
+            card.appendChild(title);
+            const desc = document.createElement('div');
+            desc.className = 'quest-objective';
+            desc.textContent = String(quest.description || '');
+            card.appendChild(desc);
+            const actions = document.createElement('div');
+            actions.className = 'npc-dialog-actions';
+            const questId = String(quest.id || '');
+            const canAccept = Array.isArray(payload.availableQuestIds) && payload.availableQuestIds.includes(questId);
+            const canComplete = Array.isArray(payload.turnInQuestIds) && payload.turnInQuestIds.includes(questId);
+            if (canAccept) {
+                const btn = document.createElement('button');
+                btn.textContent = 'Aceitar';
+                btn.addEventListener('click', () => this.network.send({ type: 'quest.accept', questId }));
+                actions.appendChild(btn);
+            }
+            if (canComplete) {
+                const btn = document.createElement('button');
+                btn.textContent = 'Concluir';
+                btn.addEventListener('click', () => this.network.send({ type: 'quest.complete', questId }));
+                actions.appendChild(btn);
+            }
+            if (!actions.children.length) {
+                const info = document.createElement('div');
+                info.className = 'quest-objective';
+                info.textContent = 'Sem acoes disponiveis agora.';
+                actions.appendChild(info);
+            }
+            card.appendChild(actions);
+            this.npcDialogBody.appendChild(card);
+        }
+        this.npcDialogPanel.classList.remove('hidden');
     }
 
     syncLocalEquippedWeaponName() {
@@ -1802,6 +1957,107 @@ export class Game {
         return null;
     }
 
+    getNpcAt(x, y) {
+        if (!Array.isArray(this.npcs)) return null;
+        for (const npc of this.npcs) {
+            const rect = this.getNpcHitboxRect(npc);
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                return String(npc.id || '');
+            }
+        }
+        return null;
+    }
+
+    getNpcById(npcId) {
+        if (!Array.isArray(this.npcs)) return null;
+        return this.npcs.find((npc) => String(npc?.id || '') === String(npcId || '')) || null;
+    }
+
+    getNpcHitboxRect(npc) {
+        const hb = npc?.hitbox && typeof npc.hitbox === 'object' ? npc.hitbox : {};
+        const anchor = npc?.anchor && typeof npc.anchor === 'object' ? npc.anchor : {};
+        const w = Math.max(24, Number(hb.w || 54));
+        const h = Math.max(24, Number(hb.h || 80));
+        const ax = Number.isFinite(Number(anchor.x)) ? Number(anchor.x) : 0.5;
+        const ay = Number.isFinite(Number(anchor.y)) ? Number(anchor.y) : 1;
+        const offsetX = Number(hb.offsetX || 0);
+        const offsetY = Number(hb.offsetY || 0);
+        const originX = Number(npc?.x || 0);
+        const originY = Number(npc?.y || 0);
+        const left = originX - w * ax + offsetX;
+        const top = originY - h * ay + offsetY;
+        return {
+            left,
+            top,
+            right: left + w,
+            bottom: top + h,
+            width: w,
+            height: h
+        };
+    }
+
+    getNpcInteractRange(npc) {
+        return Math.max(80, Number(npc?.interactRange || 170));
+    }
+
+    tryInteractNpc(npcId) {
+        const npc = this.getNpcById(npcId);
+        if (!npc || !this.localId || !this.players[this.localId]) return;
+        const me = this.players[this.localId];
+        const range = this.getNpcInteractRange(npc);
+        const now = Date.now();
+        const dist = Math.hypot(Number(npc.x) - Number(me.x), Number(npc.y) - Number(me.y));
+        if (dist <= range) {
+            this.cancelPendingNpcInteract();
+            this.network.send({ type: 'npc.interact', npcId: String(npc.id) });
+            return;
+        }
+        this.pendingNpcInteract = {
+            npcId: String(npc.id),
+            createdAt: now,
+            lastMoveAt: 0,
+            lastTryAt: 0
+        };
+        const reqId = `m-${++this.moveReqCounter}-${now}`;
+        this.network.send({ type: 'move', reqId, x: Number(npc.x), y: Number(npc.y) });
+        this.lastMoveSent = { reqId, x: Number(npc.x), y: Number(npc.y), projectedX: Number(npc.x), projectedY: Number(npc.y), at: now };
+        this.pendingNpcInteract.lastMoveAt = now;
+    }
+
+    cancelPendingNpcInteract() {
+        this.pendingNpcInteract = null;
+    }
+
+    processPendingNpcInteract() {
+        if (!this.pendingNpcInteract) return;
+        if (!this.localId || !this.players[this.localId]) return;
+        const me = this.players[this.localId];
+        const npc = this.getNpcById(this.pendingNpcInteract.npcId);
+        if (!npc) {
+            this.pendingNpcInteract = null;
+            return;
+        }
+        const now = Date.now();
+        if (now - Number(this.pendingNpcInteract.createdAt || 0) > 12000) {
+            this.pendingNpcInteract = null;
+            return;
+        }
+        const dist = Math.hypot(Number(npc.x) - Number(me.x), Number(npc.y) - Number(me.y));
+        const range = this.getNpcInteractRange(npc);
+        if (dist <= range) {
+            if (now - Number(this.pendingNpcInteract.lastTryAt || 0) < 220) return;
+            this.pendingNpcInteract.lastTryAt = now;
+            this.network.send({ type: 'npc.interact', npcId: String(npc.id) });
+            this.pendingNpcInteract = null;
+            return;
+        }
+        if (now - Number(this.pendingNpcInteract.lastMoveAt || 0) < 340) return;
+        const reqId = `m-${++this.moveReqCounter}-${now}`;
+        this.network.send({ type: 'move', reqId, x: Number(npc.x), y: Number(npc.y) });
+        this.lastMoveSent = { reqId, x: Number(npc.x), y: Number(npc.y), projectedX: Number(npc.x), projectedY: Number(npc.y), at: now };
+        this.pendingNpcInteract.lastMoveAt = now;
+    }
+
     getNearestGroundItemAt(x, y, maxDistance = 32) {
         let nearestId = null;
         let nearestDistSq = maxDistance * maxDistance;
@@ -1821,7 +2077,7 @@ export class Game {
 
     updateGroundItemCursor() {
         if (!this.canvas) return;
-        this.canvas.style.cursor = this.hoveredGroundItemId ? 'grab' : 'default';
+        this.canvas.style.cursor = this.hoveredGroundItemId ? 'grab' : (this.hoveredNpcId ? 'pointer' : 'default');
     }
 
     cancelPendingPickup() {
@@ -1884,6 +2140,11 @@ export class Game {
         this.network.send({ type: 'move', reqId, x: Number(pendingItem.x), y: Number(pendingItem.y) });
         this.lastMoveSent = { reqId, x: Number(pendingItem.x), y: Number(pendingItem.y), projectedX: Number(pendingItem.x), projectedY: Number(pendingItem.y), at: now };
         this.pendingPickup.lastMoveAt = now;
+    }
+
+    clearInteractivePendingStates() {
+        this.cancelPendingPickup();
+        this.cancelPendingNpcInteract();
     }
 
     tryPickupNearestGroundItem() {
@@ -2989,6 +3250,7 @@ export class Game {
             this.mapFeatures = [];
         }
         this.mapPortals = Array.isArray(message.portals) ? message.portals : [];
+        this.npcs = Array.isArray(message.npcs) ? message.npcs : [];
         if (this.currentMapCode) this.loadTiledMapLayout(this.currentMapCode);
         this.ensureForestMap();
 
@@ -5649,6 +5911,36 @@ export class Game {
         }
     }
 
+    drawNpcs() {
+        if (!Array.isArray(this.npcs) || !this.npcs.length) return;
+        const me = this.localId ? this.players[this.localId] : null;
+        for (const npc of this.npcs) {
+            const rect = this.getNpcHitboxRect(npc);
+            const topLeft = this.worldToRenderCoords(rect.left, rect.top);
+            const bottomRight = this.worldToRenderCoords(rect.right, rect.bottom);
+            const screenLeft = topLeft.x - this.camera.x;
+            const screenTop = topLeft.y - this.camera.y;
+            const screenRight = bottomRight.x - this.camera.x;
+            const screenBottom = bottomRight.y - this.camera.y;
+            const screenW = Math.max(20, screenRight - screenLeft);
+            const screenH = Math.max(20, screenBottom - screenTop);
+            if (screenRight < -50 || screenBottom < -50 || screenLeft > this.canvas.width + 50 || screenTop > this.canvas.height + 50) continue;
+            const dist = me ? Math.hypot(Number(npc.x) - Number(me.x), Number(npc.y) - Number(me.y)) : 0;
+            const inRange = dist <= this.getNpcInteractRange(npc);
+            const isHovered = String(this.hoveredNpcId || '') === String(npc.id || '');
+            this.ctx.fillStyle = inRange ? 'rgba(78, 190, 92, 0.28)' : 'rgba(70, 131, 255, 0.24)';
+            this.ctx.strokeStyle = isHovered ? '#ffe28a' : '#1a2c45';
+            this.ctx.lineWidth = isHovered ? 2.5 : 1.5;
+            this.ctx.fillRect(screenLeft, screenTop, screenW, screenH);
+            this.ctx.strokeRect(screenLeft, screenTop, screenW, screenH);
+            const screenCenterX = screenLeft + screenW * 0.5;
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.font = 'bold 12px Arial';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(String(npc.name || 'NPC'), screenCenterX, screenTop - 8);
+        }
+    }
+
     drawLayeredPlayerFrame(frame, screenX, screenY) {
         const drawW = 112;
         const drawH = 148;
@@ -6095,6 +6387,7 @@ export class Game {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.smoothEntities(deltaMs);
         this.processPendingPickup();
+        this.processPendingNpcInteract();
 
         if (this.localId && this.players[this.localId]) {
             const me = this.players[this.localId];
@@ -6121,6 +6414,7 @@ export class Game {
         this.drawMap();
         this.drawPathDebugOverlay();
         this.drawMobs();
+        this.drawNpcs();
         this.drawGroundItems();
         this.drawPlayers();
         this.drawSkillEffects();

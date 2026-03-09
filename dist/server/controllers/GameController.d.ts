@@ -23,6 +23,8 @@ export declare class GameController {
     private skillService;
     private combatRuntimeService;
     private combatCoreService;
+    private questService;
+    private eventService;
     players: Map<number, PlayerRuntime>;
     usernameToPlayerId: Map<string, number>;
     groundItems: GroundItem[];
@@ -81,6 +83,9 @@ export declare class GameController {
     handlePlayerRevive(player: PlayerRuntime): void;
     handleSkillCast(player: PlayerRuntime, msg: any): void;
     handleSkillLearn(player: PlayerRuntime, msg: any): void;
+    handleNpcInteract(player: PlayerRuntime, msg: any): void;
+    handleQuestAccept(player: PlayerRuntime, msg: any): void;
+    handleQuestComplete(player: PlayerRuntime, msg: any): void;
     handleToggleAfk(player: PlayerRuntime): void;
     handleStatsAllocate(player: PlayerRuntime, msg: any): void;
     tick(deltaSeconds: number, now: number): void;
@@ -93,6 +98,33 @@ export declare class GameController {
         mapKey: string;
         mapTheme: "forest" | "lava" | "undead";
         mapFeatures: import("../config").MapFeature[];
+        npcs: {
+            id: string;
+            name: string;
+            x: number;
+            y: number;
+            role: "quest_giver";
+            spriteKey: string | null;
+            hitbox: {
+                w: number;
+                h: number;
+                offsetX?: number;
+                offsetY?: number;
+            };
+            anchor: {
+                x: number;
+                y: number;
+            };
+            interactRange: number;
+        }[];
+        activeEvents: {
+            id: string;
+            name: string;
+            mapKey: string;
+            mapId: string;
+            startedAt: number;
+            endsAt: number;
+        }[];
         portals: {
             id: string;
             x: number;
@@ -153,6 +185,8 @@ export declare class GameController {
     private dropHpPotionAt;
     private dropSkillResetHourglassAt;
     private addItemToInventory;
+    private grantRewardItem;
+    private onItemCollected;
     private pruneExpiredGroundItems;
     private getAreaIdForPlayer;
     private sendPartyStateToPlayer;
@@ -195,6 +229,7 @@ export declare class GameController {
     private sendStatsUpdated;
     private sendRaw;
     private broadcastRaw;
+    private broadcastMapInstance;
 }
 export {};
 //# sourceMappingURL=GameController.d.ts.map

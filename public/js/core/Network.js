@@ -231,6 +231,16 @@ export class Network {
             this.game.onHotbarState(message);
             return;
         }
+
+        if (message.type === 'quest.state') {
+            this.game.onQuestState(message);
+            return;
+        }
+
+        if (message.type === 'npc.dialog') {
+            this.game.onNpcDialog(message);
+            return;
+        }
     }
 
     startPingLoop() {

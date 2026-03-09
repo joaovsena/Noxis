@@ -13,6 +13,8 @@ const SkillEffectsService_1 = require("../services/SkillEffectsService");
 const SkillService_1 = require("../services/SkillService");
 const CombatRuntimeService_1 = require("../services/CombatRuntimeService");
 const CombatCoreService_1 = require("../services/CombatCoreService");
+const QuestService_1 = require("../services/QuestService");
+const EventService_1 = require("../services/EventService");
 const hash_1 = require("../utils/hash");
 const math_1 = require("../utils/math");
 const config_1 = require("../config");
@@ -111,7 +113,9 @@ class GameController {
         this.friendService = new FriendService_1.FriendService(this.players, this.persistence, this.sendRaw.bind(this));
         this.movementService = new MovementService_1.MovementService(this.mapService, this.getActiveSkillEffectAggregate.bind(this));
         this.combatService = new CombatService_1.CombatService(this.players, this.mapInstanceId.bind(this), this.sendRaw.bind(this), this.partyService.hasParty.bind(this.partyService), this.partyService.arePlayersInSameParty.bind(this.partyService), this.tryPlayerAttack.bind(this));
-        this.inventoryService = new InventoryService_1.InventoryService(() => this.groundItems, (items) => { this.groundItems = items; }, this.mapInstanceId.bind(this), this.persistPlayer.bind(this), this.recomputePlayerStats.bind(this), this.sendInventoryState.bind(this), this.sendStatsUpdated.bind(this), this.normalizeHotbarBindings.bind(this), this.firstFreeInventorySlot.bind(this), this.getSpentSkillPoints.bind(this), this.sendRaw.bind(this));
+        this.inventoryService = new InventoryService_1.InventoryService(() => this.groundItems, (items) => { this.groundItems = items; }, this.mapInstanceId.bind(this), this.persistPlayer.bind(this), this.recomputePlayerStats.bind(this), this.sendInventoryState.bind(this), this.sendStatsUpdated.bind(this), this.normalizeHotbarBindings.bind(this), this.firstFreeInventorySlot.bind(this), this.getSpentSkillPoints.bind(this), this.sendRaw.bind(this), this.onItemCollected.bind(this));
+        this.questService = new QuestService_1.QuestService(this.sendRaw.bind(this), this.persistPlayer.bind(this), this.grantXp.bind(this), this.grantRewardItem.bind(this));
+        this.eventService = new EventService_1.EventService(this.mobService, this.broadcastMapInstance.bind(this), this.projectToWalkable.bind(this));
         this.skillEffectsService = new SkillEffectsService_1.SkillEffectsService(this.players, this.sendRaw.bind(this));
         this.skillService = new SkillService_1.SkillService(SKILL_DEFS, this.sendRaw.bind(this), this.normalizeClassId.bind(this), this.getSkillLevel.bind(this), this.pruneExpiredSkillEffects.bind(this), this.applyTimedSkillEffect.bind(this), this.sendSkillEffect.bind(this), this.computeMobDamage.bind(this), this.applyDamageToMobAndHandleDeath.bind(this), this.broadcastMobHit.bind(this), this.applyOnHitSkillEffects.bind(this), this.hasActiveSkillEffect.bind(this), this.removeSkillEffectById.bind(this), this.getSkillPowerWithLevel.bind(this), this.sendStatsUpdated.bind(this), this.mapInstanceId.bind(this), () => this.mobService.getMobs(), (mapId) => this.mobService.getMobsByMap(mapId), this.assignPathTo.bind(this), this.getSkillPrerequisite.bind(this), this.normalizeSkillLevels.bind(this), this.getAvailableSkillPoints.bind(this), this.recomputePlayerStats.bind(this), this.persistPlayer.bind(this));
         this.combatRuntimeService = new CombatRuntimeService_1.CombatRuntimeService(this.players, this.mobService, () => this.mobsPeacefulMode, this.mapInstanceId.bind(this), this.projectToWalkable.bind(this), this.recalculatePathToward.bind(this), this.getActiveSkillEffectAggregate.bind(this), this.computeHitChance.bind(this), this.getMobEvasion.bind(this), this.computeMobDamage.bind(this), this.applyDamageToMobAndHandleDeath.bind(this), this.applyOnHitSkillEffects.bind(this), this.sendStatsUpdated.bind(this), this.broadcastMobHit.bind(this), this.sendRaw.bind(this), this.persistPlayer.bind(this), this.syncAllPartyStates.bind(this), this.tryPlayerAttack.bind(this), this.getPvpAttackPermission.bind(this), this.isBlockedAt.bind(this), this.computeDamageAfterMitigation.bind(this));
@@ -316,6 +320,7 @@ class GameController {
                 inventory: player.inventory,
                 equippedWeaponId: player.equippedWeaponId
             }));
+            this.questService.sendQuestState(player);
             ws.send(JSON.stringify(this.buildWorldSnapshot(player.mapId, player.mapKey)));
             this.sendPartyStateToPlayer(player, null);
             this.sendPartyAreaList(player);
@@ -898,6 +903,15 @@ class GameController {
     handleSkillLearn(player, msg) {
         this.skillService.handleSkillLearn(player, msg);
     }
+    handleNpcInteract(player, msg) {
+        this.questService.handleNpcInteract(player, msg);
+    }
+    handleQuestAccept(player, msg) {
+        this.questService.handleQuestAccept(player, msg);
+    }
+    handleQuestComplete(player, msg) {
+        this.questService.handleQuestComplete(player, msg);
+    }
     handleToggleAfk(player) {
         if (player.dead || player.hp <= 0)
             return;
@@ -979,6 +993,7 @@ class GameController {
         this.sendStatsUpdated(player);
     }
     tick(deltaSeconds, now) {
+        this.eventService.tick(now);
         this.pruneExpiredGroundItems(now);
         this.pruneExpiredPartyInvites(now);
         this.pruneExpiredPartyJoinRequests(now);
@@ -1018,6 +1033,8 @@ class GameController {
             mapKey,
             mapTheme: config_1.MAP_THEMES[mapKey] || 'forest',
             mapFeatures: hasTiledCollision ? [] : (config_1.MAP_FEATURES_BY_KEY[mapKey] || []),
+            npcs: this.questService.getNpcsForMap(mapKey, mapId),
+            activeEvents: this.eventService.getActiveEventsForMap(mapKey, mapId),
             portals: config_1.PORTALS_BY_MAP_KEY[mapKey] || [],
             mapId,
             world: config_1.WORLD
@@ -1142,7 +1159,12 @@ class GameController {
         return this.combatCoreService.computeMobDamage(player, mob, multiplier, forceMagic, now);
     }
     applyDamageToMobAndHandleDeath(player, mob, damage, now) {
-        return this.combatCoreService.applyDamageToMobAndHandleDeath(player, mob, damage, now);
+        const wasAlive = Boolean(mob && Number(mob.hp || 0) > 0);
+        const ok = this.combatCoreService.applyDamageToMobAndHandleDeath(player, mob, damage, now);
+        if (ok && wasAlive && mob && Number(mob.hp || 0) <= 0) {
+            this.questService.onMobKilled(player, mob);
+        }
+        return ok;
     }
     pruneExpiredSkillEffects(player, now = Date.now()) {
         this.skillEffectsService.pruneExpiredSkillEffects(player, now);
@@ -1429,6 +1451,29 @@ class GameController {
     }
     addItemToInventory(player, item, quantity) {
         return this.inventoryService.addItemToInventory(player, item, quantity);
+    }
+    grantRewardItem(player, templateId, quantity) {
+        const qty = Math.max(0, Math.floor(Number(quantity || 0)));
+        if (qty <= 0)
+            return 0;
+        const key = String(templateId || '');
+        if (!key)
+            return qty;
+        const template = key === 'potion_hp'
+            ? config_1.HP_POTION_TEMPLATE
+            : config_1.BUILTIN_ITEM_TEMPLATE_BY_ID[key];
+        if (!template)
+            return qty;
+        const baseItem = {
+            ...template,
+            id: (0, crypto_1.randomUUID)()
+        };
+        const remaining = this.addItemToInventory(player, baseItem, qty);
+        this.sendInventoryState(player);
+        return remaining;
+    }
+    onItemCollected(player, templateId, quantity) {
+        this.questService.onItemCollected(player, templateId, quantity);
     }
     pruneExpiredGroundItems(now) {
         this.groundItems = this.groundItems.filter((item) => {
@@ -1748,6 +1793,13 @@ class GameController {
     }
     broadcastRaw(payload) {
         for (const player of this.players.values()) {
+            this.sendRaw(player.ws, payload);
+        }
+    }
+    broadcastMapInstance(mapKey, mapId, payload) {
+        for (const player of this.players.values()) {
+            if (player.mapKey !== mapKey || player.mapId !== mapId)
+                continue;
             this.sendRaw(player.ws, payload);
         }
     }

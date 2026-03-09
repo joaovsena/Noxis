@@ -5,7 +5,7 @@ const crypto_1 = require("crypto");
 const config_1 = require("../config");
 const math_1 = require("../utils/math");
 class InventoryService {
-    constructor(getGroundItems, setGroundItems, mapInstanceId, persistPlayer, recomputePlayerStats, sendInventoryState, sendStatsUpdated, normalizeHotbarBindings, firstFreeInventorySlot, getSpentSkillPoints, sendRaw) {
+    constructor(getGroundItems, setGroundItems, mapInstanceId, persistPlayer, recomputePlayerStats, sendInventoryState, sendStatsUpdated, normalizeHotbarBindings, firstFreeInventorySlot, getSpentSkillPoints, sendRaw, onItemCollected) {
         this.getGroundItems = getGroundItems;
         this.setGroundItems = setGroundItems;
         this.mapInstanceId = mapInstanceId;
@@ -17,6 +17,7 @@ class InventoryService {
         this.firstFreeInventorySlot = firstFreeInventorySlot;
         this.getSpentSkillPoints = getSpentSkillPoints;
         this.sendRaw = sendRaw;
+        this.onItemCollected = onItemCollected;
     }
     handlePickupItem(player, msg) {
         const itemId = String(msg.itemId || '');
@@ -32,8 +33,10 @@ class InventoryService {
         }
         if ((0, math_1.distance)(player, item) > config_1.ITEM_PICKUP_RANGE)
             return;
-        let remaining = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        const requestedQty = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        let remaining = requestedQty;
         remaining = this.addItemToInventory(player, item, remaining);
+        const collectedQty = Math.max(0, requestedQty - remaining);
         if (remaining <= 0) {
             items.splice(index, 1);
         }
@@ -43,6 +46,9 @@ class InventoryService {
         this.setGroundItems(items);
         this.persistPlayer(player);
         this.sendInventoryState(player);
+        if (collectedQty > 0 && this.onItemCollected) {
+            this.onItemCollected(player, String(item.templateId || item.type || ''), collectedQty);
+        }
     }
     handleHotbarSet(player, msg) {
         const raw = msg && typeof msg.bindings === 'object' ? msg.bindings : null;

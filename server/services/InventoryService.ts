@@ -12,6 +12,7 @@ type NormalizeHotbarBindingsFn = (raw: any) => any;
 type FirstFreeInventorySlotFn = (items: any[], ignoreItemIds?: Set<string>) => number;
 type GetSpentSkillPointsFn = (player: PlayerRuntime) => number;
 type SendRawFn = (ws: any, payload: any) => void;
+type ItemCollectedFn = (player: PlayerRuntime, templateId: string, quantity: number) => void;
 
 export class InventoryService {
     constructor(
@@ -25,7 +26,8 @@ export class InventoryService {
         private readonly normalizeHotbarBindings: NormalizeHotbarBindingsFn,
         private readonly firstFreeInventorySlot: FirstFreeInventorySlotFn,
         private readonly getSpentSkillPoints: GetSpentSkillPointsFn,
-        private readonly sendRaw: SendRawFn
+        private readonly sendRaw: SendRawFn,
+        private readonly onItemCollected?: ItemCollectedFn
     ) {}
 
     handlePickupItem(player: PlayerRuntime, msg: any) {
@@ -40,8 +42,10 @@ export class InventoryService {
             return;
         }
         if (distance(player, item) > ITEM_PICKUP_RANGE) return;
-        let remaining = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        const requestedQty = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        let remaining = requestedQty;
         remaining = this.addItemToInventory(player, item, remaining);
+        const collectedQty = Math.max(0, requestedQty - remaining);
         if (remaining <= 0) {
             items.splice(index, 1);
         } else {
@@ -50,6 +54,9 @@ export class InventoryService {
         this.setGroundItems(items);
         this.persistPlayer(player);
         this.sendInventoryState(player);
+        if (collectedQty > 0 && this.onItemCollected) {
+            this.onItemCollected(player, String(item.templateId || item.type || ''), collectedQty);
+        }
     }
 
     handleHotbarSet(player: PlayerRuntime, msg: any) {
@@ -327,4 +334,3 @@ export class InventoryService {
         return at.length > 0 && at === bt;
     }
 }
-

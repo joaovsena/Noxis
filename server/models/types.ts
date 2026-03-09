@@ -91,6 +91,13 @@ export interface Mob {
     invulnerableUntil?: number;
     targetPlayerId?: number | null;
     lastAttackAt?: number;
+    noRespawn?: boolean;
+    eventId?: string | null;
+    eventName?: string | null;
+    eventLootTable?: Array<{
+        type: 'weapon' | 'potion_hp' | 'skill_reset_hourglass';
+        chance: number;
+    }>;
 }
 
 export interface GroundItem {
@@ -339,6 +346,21 @@ export interface SkillLearnMessage {
     skillId: string;
 }
 
+export interface NpcInteractMessage {
+    type: 'npc.interact';
+    npcId: string;
+}
+
+export interface QuestAcceptMessage {
+    type: 'quest.accept';
+    questId: string;
+}
+
+export interface QuestCompleteMessage {
+    type: 'quest.complete';
+    questId: string;
+}
+
 export interface PlayerToggleAfkMessage {
     type: 'player.toggleAfk';
 }
@@ -396,6 +418,9 @@ export type WSMessage =
     | PlayerReviveMessage
     | SkillCastMessage
     | SkillLearnMessage
+    | NpcInteractMessage
+    | QuestAcceptMessage
+    | QuestCompleteMessage
     | PlayerToggleAfkMessage
     | HotbarSetMessage
     | PingMessage;

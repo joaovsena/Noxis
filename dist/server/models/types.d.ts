@@ -96,6 +96,13 @@ export interface Mob {
     invulnerableUntil?: number;
     targetPlayerId?: number | null;
     lastAttackAt?: number;
+    noRespawn?: boolean;
+    eventId?: string | null;
+    eventName?: string | null;
+    eventLootTable?: Array<{
+        type: 'weapon' | 'potion_hp' | 'skill_reset_hourglass';
+        chance: number;
+    }>;
 }
 export interface GroundItem {
     id: string;
@@ -299,6 +306,18 @@ export interface SkillLearnMessage {
     type: 'skill.learn';
     skillId: string;
 }
+export interface NpcInteractMessage {
+    type: 'npc.interact';
+    npcId: string;
+}
+export interface QuestAcceptMessage {
+    type: 'quest.accept';
+    questId: string;
+}
+export interface QuestCompleteMessage {
+    type: 'quest.complete';
+    questId: string;
+}
 export interface PlayerToggleAfkMessage {
     type: 'player.toggleAfk';
 }
@@ -310,5 +329,5 @@ export interface PingMessage {
     type: 'ping';
     nonce?: number;
 }
-export type WSMessage = AuthMessage | CharacterCreateMessage | CharacterEnterMessage | CharacterBackMessage | MoveMessage | TargetMobMessage | ChatMessage | PickupItemMessage | EquipItemMessage | EquipRequestMessage | InventoryMoveMessage | InventorySortMessage | InventoryDeleteMessage | InventoryUnequipToSlotMessage | ItemUseMessage | SwitchInstanceMessage | AdminCommandMessage | AdminSetMobPeacefulMessage | PartyCreateMessage | PartyInviteMessage | PartyAcceptInviteMessage | PartyDeclineInviteMessage | PartyLeaveMessage | PartyKickMessage | PartyPromoteMessage | PartyRequestAreaPartiesMessage | PartyRequestJoinMessage | PartyApproveJoinMessage | PartyWaypointPingMessage | FriendRequestMessage | FriendAcceptMessage | FriendDeclineMessage | FriendRemoveMessage | FriendListMessage | StatsAllocateMessage | PlayerSetPvpModeMessage | CombatAttackMessage | CombatTargetPlayerMessage | CombatClearTargetMessage | PlayerReviveMessage | SkillCastMessage | SkillLearnMessage | PlayerToggleAfkMessage | HotbarSetMessage | PingMessage;
+export type WSMessage = AuthMessage | CharacterCreateMessage | CharacterEnterMessage | CharacterBackMessage | MoveMessage | TargetMobMessage | ChatMessage | PickupItemMessage | EquipItemMessage | EquipRequestMessage | InventoryMoveMessage | InventorySortMessage | InventoryDeleteMessage | InventoryUnequipToSlotMessage | ItemUseMessage | SwitchInstanceMessage | AdminCommandMessage | AdminSetMobPeacefulMessage | PartyCreateMessage | PartyInviteMessage | PartyAcceptInviteMessage | PartyDeclineInviteMessage | PartyLeaveMessage | PartyKickMessage | PartyPromoteMessage | PartyRequestAreaPartiesMessage | PartyRequestJoinMessage | PartyApproveJoinMessage | PartyWaypointPingMessage | FriendRequestMessage | FriendAcceptMessage | FriendDeclineMessage | FriendRemoveMessage | FriendListMessage | StatsAllocateMessage | PlayerSetPvpModeMessage | CombatAttackMessage | CombatTargetPlayerMessage | CombatClearTargetMessage | PlayerReviveMessage | SkillCastMessage | SkillLearnMessage | NpcInteractMessage | QuestAcceptMessage | QuestCompleteMessage | PlayerToggleAfkMessage | HotbarSetMessage | PingMessage;
 //# sourceMappingURL=types.d.ts.map
