@@ -1052,7 +1052,6 @@ class GameController {
             maxHp: player.maxHp,
             equippedWeaponName: weapon ? weapon.name : null,
             pathNodes: Array.isArray(player.movePath) ? player.movePath.slice(0, 40).map((pt) => ({ x: Number(pt.x), y: Number(pt.y) })) : [],
-            pathNodesRaw: Array.isArray(player.rawMovePath) ? player.rawMovePath.slice(0, 80).map((pt) => ({ x: Number(pt.x), y: Number(pt.y) })) : [],
             xp: player.xp,
             xpToNext: (0, math_1.xpRequired)(player.level),
             stats: player.stats,

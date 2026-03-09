@@ -12,6 +12,10 @@ import prisma from './utils/prisma';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const parsedWorldStateMs = Number(process.env.WORLD_STATE_MS);
+const WORLD_STATE_MS = Number.isFinite(parsedWorldStateMs)
+    ? Math.max(40, Math.min(250, Math.floor(parsedWorldStateMs)))
+    : 66;
 app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
     res.type('application/json').send('{}');
 });
@@ -69,6 +73,7 @@ async function initializeServer() {
         });
 
         let lastTickAt = Date.now();
+        let lastWorldBroadcastAt = 0;
         setInterval(() => {
             const now = Date.now();
             const elapsedMs = Math.max(1, now - lastTickAt);
@@ -76,13 +81,22 @@ async function initializeServer() {
             const dt = Math.max(0.010, Math.min(0.100, elapsedMs / 1000));
             gameController.tick(dt, now);
 
+            if (now - lastWorldBroadcastAt < WORLD_STATE_MS) return;
+            lastWorldBroadcastAt = now;
+            const serializedSnapshotByInstance = new Map<string, string>();
             for (const client of wss.clients) {
                 if (client.readyState !== WebSocket.OPEN) continue;
                 const extClient = client as ExtendedWebSocket;
                 if (!extClient.playerId) continue;
                 const player = gameController.getPlayerByRuntimeId(extClient.playerId);
                 if (!player) continue;
-                client.send(JSON.stringify(gameController.buildWorldSnapshot(player.mapId, player.mapKey)));
+                const instanceKey = `${String(player.mapKey)}::${String(player.mapId)}`;
+                let serialized = serializedSnapshotByInstance.get(instanceKey);
+                if (!serialized) {
+                    serialized = JSON.stringify(gameController.buildWorldSnapshot(player.mapId, player.mapKey));
+                    serializedSnapshotByInstance.set(instanceKey, serialized);
+                }
+                client.send(serialized);
             }
         }, TICK_MS);
 
