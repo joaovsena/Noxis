@@ -9,6 +9,7 @@ import {
 import { PlayerRuntime } from '../models/types';
 import { clamp } from '../utils/math';
 import { getForestTiledCollisionSampler } from '../maps/tiledForestCollision';
+import { getDungeonTiledCollisionSampler } from '../maps/tiledDungeonCollision';
 
 const MOVE_COLLISION_PADDING = 4;
 const PATHFIND_CELL_SIZE = 12;
@@ -27,6 +28,7 @@ export class MapService {
 
     getMapTiledCollisionSampler(mapKey: string) {
         if (mapKey === 'forest') return getForestTiledCollisionSampler();
+        if (String(mapKey || '').startsWith('dng_')) return getDungeonTiledCollisionSampler();
         return null;
     }
 

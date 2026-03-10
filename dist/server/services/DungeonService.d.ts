@@ -26,12 +26,16 @@ export declare class DungeonService {
     private readonly partyToOpenInstanceId;
     private readonly emptySince;
     private readonly readyCheckToInstanceId;
+    private readonly pendingTeleportByRequestId;
     constructor(players: Map<number, PlayerRuntime>, mobService: any, sendRaw: SendRawFn, sendStatsUpdated: SendStatsUpdatedFn, persistPlayer: PersistPlayerFn, persistPlayerCritical: PersistPlayerCriticalFn, grantCurrency: GrantCurrencyFn, projectToWalkable: ProjectToWalkableFn, removeGroundItemsByMapInstance: RemoveGroundItemsByMapInstanceFn, dropTemplateAt: DropTemplateAtFn);
     getDungeonEntryForNpc(npcId: string): {
         templateId: string;
         name: string;
         description: string;
         maxPlayers: number;
+    } | null;
+    getNpcUiStateForPlayer(player: PlayerRuntime, npcId: string): {
+        opened: boolean;
     } | null;
     getDebugSnapshot(): {
         id: string;
@@ -84,6 +88,7 @@ export declare class DungeonService {
     private tickReadyCheck;
     private finalizeReadyCheck;
     private broadcastReadyState;
+    private tickPendingTeleports;
     private ensureInstanceActive;
     private teleportPlayerIntoInstance;
     private movePlayerToInstance;
@@ -94,6 +99,7 @@ export declare class DungeonService {
     private completeInstance;
     private checkEmptyInstance;
     private cleanupInstance;
+    private clearPendingTeleportsForInstance;
     private teleportPlayerToOrigin;
     private onPlayerExitedInstance;
     private getOnlineInstanceMembers;

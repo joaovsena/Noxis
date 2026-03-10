@@ -11,6 +11,7 @@ type PersistPlayerCriticalFn = (player: PlayerRuntime, reason?: string) => void;
 type GrantXpFn = (player: PlayerRuntime, amount: number, context?: { mapKey?: string; mapId?: string }) => void;
 type GrantItemFn = (player: PlayerRuntime, templateId: string, quantity: number) => number;
 type GrantCurrencyFn = (player: PlayerRuntime, reward: Partial<Wallet>, sourceLabel: string) => void;
+type GetDungeonUiStateFn = (player: PlayerRuntime, npcId: string) => Record<string, any> | null;
 
 type QuestObjectiveDef =
     | { id: string; type: 'kill'; targetKinds?: string[]; required: number; text: string }
@@ -98,7 +99,8 @@ export class QuestService {
         private readonly persistPlayerCritical: PersistPlayerCriticalFn,
         private readonly grantXp: GrantXpFn,
         private readonly grantRewardItem: GrantItemFn,
-        private readonly grantCurrency: GrantCurrencyFn
+        private readonly grantCurrency: GrantCurrencyFn,
+        private readonly getDungeonUiState?: GetDungeonUiStateFn
     ) {}
 
     getNpcsForMap(mapKey: string, mapId: string) {
@@ -174,7 +176,7 @@ export class QuestService {
         this.sendRaw(player.ws, {
             type: 'npc.dialog',
             npc: { id: npc.id, name: npc.name, greeting: npc.greeting },
-            dungeonEntry: this.getDungeonEntryForNpc(npc.id),
+            dungeonEntry: this.getDungeonEntryForNpc(npc.id, player),
             availableQuestIds,
             turnInQuestIds,
             shopOffers: this.getShopOffers(npc.id),
@@ -192,14 +194,18 @@ export class QuestService {
         if (changedByTalk) this.sendQuestState(player);
     }
 
-    private getDungeonEntryForNpc(npcId: string) {
+    private getDungeonEntryForNpc(npcId: string, player?: PlayerRuntime) {
         const dungeon = DUNGEON_BY_ENTRY_NPC[String(npcId || '')];
         if (!dungeon) return null;
+        const uiState = player && this.getDungeonUiState
+            ? this.getDungeonUiState(player, npcId)
+            : null;
         return {
             templateId: dungeon.id,
             name: dungeon.name,
             description: dungeon.description,
-            maxPlayers: dungeon.maxPlayers
+            maxPlayers: dungeon.maxPlayers,
+            ...(uiState || {})
         };
     }
 

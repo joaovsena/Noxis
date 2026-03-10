@@ -273,7 +273,8 @@ export class GameController {
             this.persistPlayerCritical.bind(this),
             this.grantXp.bind(this),
             this.grantRewardItem.bind(this),
-            this.grantCurrency.bind(this)
+            this.grantCurrency.bind(this),
+            (player, npcId) => this.dungeonService?.getNpcUiStateForPlayer(player, npcId) || null
         );
         this.eventService = new EventService(
             this.mobService,
@@ -1153,6 +1154,7 @@ export class GameController {
     }
 
     handlePartyLeave(player: PlayerRuntime) {
+        this.dungeonService.leaveDungeon(player, 'Voce saiu do grupo e deixou a dungeon.');
         this.partyService.handlePartyLeave(player);
     }
 

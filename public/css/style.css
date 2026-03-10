@@ -762,6 +762,19 @@ button:hover {
     padding: 6px 8px;
 }
 
+#dungeon-leave-btn {
+    width: 100%;
+    font-size: 12px;
+    padding: 7px 10px;
+    border: 1px solid #8b4c4c;
+    background: #4f2424;
+    color: #ffe2e2;
+}
+
+#dungeon-leave-btn:hover {
+    background: #5f2b2b;
+}
+
 .map-settings-line {
     display: flex;
     align-items: center;

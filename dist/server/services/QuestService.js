@@ -52,13 +52,14 @@ const QUESTS = [
 ];
 const QUEST_BY_ID = Object.fromEntries(QUESTS.map((q) => [q.id, q]));
 class QuestService {
-    constructor(sendRaw, persistPlayer, persistPlayerCritical, grantXp, grantRewardItem, grantCurrency) {
+    constructor(sendRaw, persistPlayer, persistPlayerCritical, grantXp, grantRewardItem, grantCurrency, getDungeonUiState) {
         this.sendRaw = sendRaw;
         this.persistPlayer = persistPlayer;
         this.persistPlayerCritical = persistPlayerCritical;
         this.grantXp = grantXp;
         this.grantRewardItem = grantRewardItem;
         this.grantCurrency = grantCurrency;
+        this.getDungeonUiState = getDungeonUiState;
     }
     getNpcsForMap(mapKey, mapId) {
         return npcs_1.NPCS.filter((n) => n.mapKey === mapKey && n.mapId === mapId).map((n) => ({
@@ -130,7 +131,7 @@ class QuestService {
         this.sendRaw(player.ws, {
             type: 'npc.dialog',
             npc: { id: npc.id, name: npc.name, greeting: npc.greeting },
-            dungeonEntry: this.getDungeonEntryForNpc(npc.id),
+            dungeonEntry: this.getDungeonEntryForNpc(npc.id, player),
             availableQuestIds,
             turnInQuestIds,
             shopOffers: this.getShopOffers(npc.id),
@@ -147,15 +148,19 @@ class QuestService {
         if (changedByTalk)
             this.sendQuestState(player);
     }
-    getDungeonEntryForNpc(npcId) {
+    getDungeonEntryForNpc(npcId, player) {
         const dungeon = dungeons_1.DUNGEON_BY_ENTRY_NPC[String(npcId || '')];
         if (!dungeon)
             return null;
+        const uiState = player && this.getDungeonUiState
+            ? this.getDungeonUiState(player, npcId)
+            : null;
         return {
             templateId: dungeon.id,
             name: dungeon.name,
             description: dungeon.description,
-            maxPlayers: dungeon.maxPlayers
+            maxPlayers: dungeon.maxPlayers,
+            ...(uiState || {})
         };
     }
     handleQuestAccept(player, msg) {

@@ -142,7 +142,7 @@ class GameController {
         this.movementService = new MovementService_1.MovementService(this.mapService, this.getActiveSkillEffectAggregate.bind(this));
         this.combatService = new CombatService_1.CombatService(this.players, this.mapInstanceId.bind(this), this.sendRaw.bind(this), this.partyService.hasParty.bind(this.partyService), this.partyService.arePlayersInSameParty.bind(this.partyService), this.tryPlayerAttack.bind(this));
         this.inventoryService = new InventoryService_1.InventoryService(() => this.groundItems, (items) => { this.groundItems = items; }, this.mapInstanceId.bind(this), this.persistPlayer.bind(this), this.recomputePlayerStats.bind(this), this.sendInventoryState.bind(this), this.sendStatsUpdated.bind(this), this.normalizeHotbarBindings.bind(this), this.firstFreeInventorySlot.bind(this), this.getSpentSkillPoints.bind(this), this.sendRaw.bind(this), this.normalizeClassId.bind(this), this.onItemCollected.bind(this));
-        this.questService = new QuestService_1.QuestService(this.sendRaw.bind(this), this.persistPlayer.bind(this), this.persistPlayerCritical.bind(this), this.grantXp.bind(this), this.grantRewardItem.bind(this), this.grantCurrency.bind(this));
+        this.questService = new QuestService_1.QuestService(this.sendRaw.bind(this), this.persistPlayer.bind(this), this.persistPlayerCritical.bind(this), this.grantXp.bind(this), this.grantRewardItem.bind(this), this.grantCurrency.bind(this), (player, npcId) => this.dungeonService?.getNpcUiStateForPlayer(player, npcId) || null);
         this.eventService = new EventService_1.EventService(this.mobService, this.broadcastMapInstance.bind(this), this.projectToWalkable.bind(this));
         this.dungeonService = new DungeonService_1.DungeonService(this.players, this.mobService, this.sendRaw.bind(this), this.sendStatsUpdated.bind(this), this.persistPlayer.bind(this), this.persistPlayerCritical.bind(this), this.grantCurrency.bind(this), this.projectToWalkable.bind(this), this.removeGroundItemsByMapInstance.bind(this), this.dropTemplateAt.bind(this));
         this.skillEffectsService = new SkillEffectsService_1.SkillEffectsService(this.players, this.sendRaw.bind(this));
@@ -867,6 +867,7 @@ class GameController {
         this.partyService.handlePartyDeclineInvite(player, msg);
     }
     handlePartyLeave(player) {
+        this.dungeonService.leaveDungeon(player, 'Voce saiu do grupo e deixou a dungeon.');
         this.partyService.handlePartyLeave(player);
     }
     handlePartyKick(player, msg) {

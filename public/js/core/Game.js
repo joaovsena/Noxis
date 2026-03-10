@@ -88,6 +88,7 @@ export class Game {
         this.mobPeacefulToggle = document.getElementById('mob-peaceful-toggle');
         this.dungeonDebugSetting = document.getElementById('dungeon-debug-setting');
         this.dungeonDebugButton = document.getElementById('dungeon-debug-btn');
+        this.dungeonLeaveBtn = document.getElementById('dungeon-leave-btn');
         this.pathDebugEnabled = false;
         this.mobPeacefulEnabled = false;
         if (this.mapCodeLabel) this.mapCodeLabel.textContent = `Mapa ${this.currentMapCode}`;
@@ -257,6 +258,7 @@ export class Game {
             dex: 0,
             vit: 0
         };
+        this.updateDungeonLeaveButtonVisibility();
         this.skillStateStorageKey = 'noxis.skillTree.v1';
         this.skillTreeTab = 'buildA';
         this.skillTreeNodes = this.buildSkillTreeNodes();
@@ -308,6 +310,7 @@ export class Game {
         this.frameIntervalMs = 1000 / this.maxFps;
         this.lastRenderAt = 0;
         this.loadTiledMapLayout('A1');
+        this.loadTiledMapLayout('DNG');
         this.ensureForestMap();
         this.setPartyTab('area');
         this.renderPartyPanel();
@@ -775,6 +778,11 @@ export class Game {
         if (this.mapSettingsToggle && this.mapSettingsPanel) {
             this.mapSettingsToggle.addEventListener('click', () => {
                 this.mapSettingsPanel.classList.toggle('hidden');
+            });
+        }
+        if (this.dungeonLeaveBtn) {
+            this.dungeonLeaveBtn.addEventListener('click', () => {
+                this.network.send({ type: 'dungeon.leave' });
             });
         }
         if (this.autoAttackToggle) {
@@ -1481,13 +1489,17 @@ export class Game {
         if (already) return;
         const members = Array.isArray(message?.members) ? message.members : [];
         const readyCount = members.filter((m) => Boolean(m?.ready)).length;
+        const purpose = String(message?.purpose || 'open');
         this.pendingDungeonReadyChecks.push({
             requestId,
             dungeonName: String(message?.dungeon?.name || 'Expedicao'),
             expiresAt: Date.now() + Math.max(1000, Number(message?.timeoutMs || 15000)),
             readyCount,
             totalCount: Math.max(1, members.length),
-            respondedByMe: false
+            purpose,
+            respondedByMe: false,
+            acceptedByMe: false,
+            teleportAt: null
         });
         this.renderDungeonNotifications();
     }
@@ -1501,6 +1513,23 @@ export class Game {
             if (entry) {
                 entry.readyCount = members.filter((m) => Boolean(m?.ready)).length;
                 entry.totalCount = Math.max(1, members.length);
+                const phase = String(message?.phase || '');
+                if (phase === 'teleport_queued') {
+                    const teleportAt = Number(message?.teleportAt || 0);
+                    const meId = Number(this.localId || 0);
+                    const myState = members.find((m) => Number(m?.playerId) === meId) || null;
+                    const acceptedByMe = Boolean(myState?.ready);
+                    if (acceptedByMe && Number.isFinite(teleportAt) && teleportAt > 0) {
+                        entry.respondedByMe = true;
+                        entry.acceptedByMe = true;
+                        entry.teleportAt = Number.isFinite(Number(entry.teleportAt)) && Number(entry.teleportAt) > 0
+                            ? Math.min(Number(entry.teleportAt), teleportAt)
+                            : teleportAt;
+                        entry.expiresAt = Number(entry.teleportAt) + 1500;
+                    } else {
+                        this.pendingDungeonReadyChecks = this.pendingDungeonReadyChecks.filter((it) => it.requestId !== requestId);
+                    }
+                }
                 this.renderDungeonNotifications();
             }
         }
@@ -1583,7 +1612,20 @@ export class Game {
             const partyMemberCount = Array.isArray(this.partyState?.members) ? this.partyState.members.length : 0;
             const hasValidParty = Boolean(this.partyState && partyMemberCount >= 1);
             const isLeader = Boolean(this.partyState && Number(this.partyState.leaderId) === Number(this.localId));
-            if (!hasValidParty) {
+            const hasOpenedDungeon = Boolean(dungeonEntry.opened);
+            if (!hasOpenedDungeon) {
+                const openBtn = document.createElement('button');
+                openBtn.textContent = 'Abrir Dungeon';
+                openBtn.addEventListener('click', () => {
+                    if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
+                    this.network.send({
+                        type: 'dungeon.enter',
+                        npcId: String(payload.npc.id || ''),
+                        mode: 'open'
+                    });
+                });
+                dungeonActions.appendChild(openBtn);
+            } else if (!hasValidParty) {
                 const partyHint = document.createElement('div');
                 partyHint.className = 'quest-objective';
                 partyHint.textContent = 'Entrada permitida apenas para quem estiver em grupo.';
@@ -1592,6 +1634,7 @@ export class Game {
                 const soloBtn = document.createElement('button');
                 soloBtn.textContent = 'Entrar sozinho';
                 soloBtn.addEventListener('click', () => {
+                    if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
                     this.network.send({
                         type: 'dungeon.enter',
                         npcId: String(payload.npc.id || ''),
@@ -1601,6 +1644,7 @@ export class Game {
                 const groupBtn = document.createElement('button');
                 groupBtn.textContent = 'Levar grupo comigo';
                 groupBtn.addEventListener('click', () => {
+                    if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
                     this.network.send({
                         type: 'dungeon.enter',
                         npcId: String(payload.npc.id || ''),
@@ -1611,12 +1655,13 @@ export class Game {
                 dungeonActions.appendChild(groupBtn);
             } else {
                 const enterBtn = document.createElement('button');
-                enterBtn.textContent = 'Entrar na Dungeon';
+                enterBtn.textContent = 'Entrar sozinho';
                 enterBtn.addEventListener('click', () => {
+                    if (this.npcDialogPanel) this.npcDialogPanel.classList.add('hidden');
                     this.network.send({
                         type: 'dungeon.enter',
                         npcId: String(payload.npc.id || ''),
-                        mode: 'group'
+                        mode: 'solo'
                     });
                 });
                 dungeonActions.appendChild(enterBtn);
@@ -3593,12 +3638,13 @@ export class Game {
         if (message.mapKey) this.currentMapKey = message.mapKey;
         if (message.mapTheme) this.currentMapTheme = message.mapTheme;
         this.mapFeatures = Array.isArray(message.mapFeatures) ? message.mapFeatures : [];
-        if (this.currentMapCode === 'A1' && this.hasTiledLayout('A1')) {
+        if (this.hasTiledLayout(this.currentMapCode)) {
             this.mapFeatures = [];
         }
         this.mapPortals = Array.isArray(message.portals) ? message.portals : [];
         this.npcs = Array.isArray(message.npcs) ? message.npcs : [];
         if (this.currentMapCode) this.loadTiledMapLayout(this.currentMapCode);
+        this.updateDungeonLeaveButtonVisibility();
         this.ensureForestMap();
 
         this.syncPlayers(message.players || {});
@@ -3607,6 +3653,15 @@ export class Game {
         this.updateAfkBanner();
         this.updatePlayerCard();
         this.updateTargetPlayerCard();
+    }
+
+    isDungeonMapActive() {
+        return this.currentMapCode === 'DNG' || String(this.currentMapKey || '').startsWith('dng_');
+    }
+
+    updateDungeonLeaveButtonVisibility() {
+        if (!this.dungeonLeaveBtn) return;
+        this.dungeonLeaveBtn.classList.toggle('hidden', !this.isDungeonMapActive());
     }
 
     hasTiledLayout(mapCode = this.currentMapCode) {
@@ -3620,17 +3675,48 @@ export class Game {
     }
 
     shouldRenderTiledMap() {
-        return this.currentMapCode === 'A1' && this.hasTiledLayout('A1') && this.hasTiledTileset('A1');
+        const code = String(this.currentMapCode || '').toUpperCase();
+        return this.hasTiledLayout(code) && this.hasTiledTileset(code);
     }
 
     isIsometricMap() {
-        const layout = this.tiledMapLayouts?.A1;
-        if (this.currentMapCode === 'DNG') return true;
-        return this.currentMapCode === 'A1' && String(layout?.orientation || '').toLowerCase() === 'isometric';
+        const code = String(this.currentMapCode || '').toUpperCase();
+        const layout = this.tiledMapLayouts?.[code];
+        if (layout) return String(layout?.orientation || '').toLowerCase() === 'isometric';
+        return code === 'DNG';
     }
 
     getIsoProjectionConfig() {
-        if (this.currentMapCode === 'DNG') {
+        const code = String(this.currentMapCode || '').toUpperCase();
+        const layout = this.tiledMapLayouts?.[code];
+        if (layout && this.isIsometricMap()) {
+            const mapW = Math.max(1, Number(layout.width || 1));
+            const mapH = Math.max(1, Number(layout.height || 1));
+            const tileW = Math.max(1, Number(layout.tilewidth || 1));
+            const tileH = Math.max(1, Number(layout.tileheight || 1));
+            const halfW = tileW / 2;
+            const halfH = tileH / 2;
+            const span = Math.max(1, mapW + mapH - 2);
+            const isoW = span * halfW;
+            const isoH = span * halfH;
+            const scale = Math.min(this.mapWidth / Math.max(1, isoW), this.mapHeight / Math.max(1, isoH));
+            const projectedW = isoW * scale;
+            const projectedH = isoH * scale;
+            const offsetX = (this.mapWidth - projectedW) * 0.5;
+            const offsetY = (this.mapHeight - projectedH) * 0.5;
+            return {
+                mapW,
+                mapH,
+                tileW,
+                tileH,
+                halfW,
+                halfH,
+                scale,
+                offsetX,
+                offsetY
+            };
+        }
+        if (code === 'DNG') {
             const mapW = Math.max(24, Math.floor(this.mapWidth / this.tileSize));
             const mapH = Math.max(24, Math.floor(this.mapHeight / this.tileSize));
             const tileW = 128;
@@ -3647,33 +3733,7 @@ export class Game {
             const offsetY = (this.mapHeight - projectedH) * 0.5;
             return { mapW, mapH, tileW, tileH, halfW, halfH, scale, offsetX, offsetY };
         }
-        const layout = this.tiledMapLayouts?.A1;
-        if (!layout || !this.isIsometricMap()) return null;
-        const mapW = Math.max(1, Number(layout.width || 1));
-        const mapH = Math.max(1, Number(layout.height || 1));
-        const tileW = Math.max(1, Number(layout.tilewidth || 1));
-        const tileH = Math.max(1, Number(layout.tileheight || 1));
-        const halfW = tileW / 2;
-        const halfH = tileH / 2;
-        const span = Math.max(1, mapW + mapH - 2);
-        const isoW = span * halfW;
-        const isoH = span * halfH;
-        const scale = Math.min(this.mapWidth / Math.max(1, isoW), this.mapHeight / Math.max(1, isoH));
-        const projectedW = isoW * scale;
-        const projectedH = isoH * scale;
-        const offsetX = (this.mapWidth - projectedW) * 0.5;
-        const offsetY = (this.mapHeight - projectedH) * 0.5;
-        return {
-            mapW,
-            mapH,
-            tileW,
-            tileH,
-            halfW,
-            halfH,
-            scale,
-            offsetX,
-            offsetY
-        };
+        return null;
     }
 
     worldToRenderCoords(worldX, worldY) {
@@ -3720,11 +3780,12 @@ export class Game {
         const code = String(mapCode || '').toUpperCase();
         if (!code || this.tiledMapLayouts[code]) return;
         if (this.tiledMapLoadState[code] === 'loading' || this.tiledMapLoadState[code] === 'failed') return;
-        if (code !== 'A1') return;
+        const mapConfig = this.getTiledMapConfig(code);
+        if (!mapConfig) return;
 
         this.tiledMapLoadState[code] = 'loading';
         try {
-            const response = await fetch(`/maps/${code}/a1.tmj`, { cache: 'no-store' });
+            const response = await fetch(mapConfig.tmjUrl, { cache: 'no-store' });
             if (!response.ok) throw new Error(`http_${response.status}`);
             const tmj = await response.json();
             const width = Math.max(1, Math.floor(Number(tmj?.width || 0)));
@@ -3733,13 +3794,19 @@ export class Game {
             const tileheight = Math.max(1, Number(tmj?.tileheight || 1));
             const orientation = String(tmj?.orientation || '');
             const layers = Array.isArray(tmj?.layers)
-                ? tmj.layers.filter((layer) => layer?.type === 'tilelayer' && Array.isArray(layer?.data))
+                ? tmj.layers
+                    .filter((layer) => layer?.type === 'tilelayer')
+                    .map((layer) => ({
+                        ...layer,
+                        data: this.decodeTiledLayerData(layer, width, height)
+                    }))
+                    .filter((layer) => Array.isArray(layer?.data) && layer.data.length > 0)
                 : [];
             const tilesets = Array.isArray(tmj?.tilesets) ? tmj.tilesets : [];
             if (!width || !height || !layers.length) throw new Error('invalid_tmj');
 
             this.tiledMapLayouts[code] = { width, height, tilewidth, tileheight, orientation, layers, tilesets };
-            await this.loadTiledTilesetForMap(code, tmj, '/maps/A1/a1.tmj');
+            await this.loadTiledTilesetForMap(code, tmj, mapConfig.tmjUrl, mapConfig.tilesBaseUrl);
             delete this.tiledRenderCache[code];
             this.tiledMapLoadState[code] = 'ready';
             if (this.currentMapCode === code) {
@@ -3751,7 +3818,7 @@ export class Game {
         }
     }
 
-    async loadTiledTilesetForMap(mapCode, tmj, tmjUrl) {
+    async loadTiledTilesetForMap(mapCode, tmj, tmjUrl, tilesBaseUrl = '/maps/tileset/a1/') {
         const code = String(mapCode || '').toUpperCase();
         if (this.tiledTilesetLoadState[code] === 'loading' || this.tiledTilesetLoadState[code] === 'ready') return;
         const tsRef = Array.isArray(tmj?.tilesets) ? tmj.tilesets[0] : null;
@@ -3764,7 +3831,7 @@ export class Game {
             const response = await fetch(tsxUrl, { cache: 'no-store' });
             if (!response.ok) throw new Error(`http_${response.status}`);
             const tsx = await response.text();
-            const parsedTileset = this.parseTsxTileImages(tsx);
+            const parsedTileset = this.parseTsxTileImages(tsx, { mapCode: code, tmjUrl, tilesBaseUrl });
             this.tiledTilesets[code] = {
                 ...parsedTileset,
                 firstgid: Math.max(1, Number(tsRef?.firstgid || 1))
@@ -3776,9 +3843,12 @@ export class Game {
         }
     }
 
-    parseTsxTileImages(tsxText) {
+    parseTsxTileImages(tsxText, options = {}) {
         const out = {};
         const text = String(tsxText || '');
+        const mapCode = String(options?.mapCode || this.currentMapCode || '').toUpperCase();
+        const tmjUrl = String(options?.tmjUrl || '/maps/A1/a1.tmj');
+        const tilesBaseUrl = String(options?.tilesBaseUrl || '/maps/tileset/a1/');
         const tileOffsetMatch = text.match(/<tileoffset\s+x="(-?\d+)"\s+y="(-?\d+)"/);
         const tilesetTileWidthMatch = text.match(/tilewidth="(\d+)"/);
         const tilesetTileHeightMatch = text.match(/tileheight="(\d+)"/);
@@ -3796,15 +3866,77 @@ export class Game {
                 const source = String(imageMatch[1]);
                 const basename = source.split('/').pop()?.split('\\').pop();
                 if (basename) {
+                    const srcCandidates = this.resolveTiledImageCandidates(source, basename, mapCode, tmjUrl, tilesBaseUrl);
                     const img = new Image();
-                    img.src = `/maps/tileset/a1/${basename}`;
-                    img.onload = () => { delete this.tiledRenderCache.A1; };
+                    let idx = 0;
+                    img.onload = () => { delete this.tiledRenderCache[mapCode]; };
+                    img.onerror = () => {
+                        idx += 1;
+                        if (idx < srcCandidates.length) img.src = srcCandidates[idx];
+                    };
+                    img.src = srcCandidates[0];
                     out[localId] = img;
                 }
             }
             match = tileBlockRegex.exec(text);
         }
         return { tileImagesById: out, tileoffsetX, tileoffsetY, tilesetTileWidth, tilesetTileHeight };
+    }
+
+    getTiledMapConfig(mapCode) {
+        const code = String(mapCode || '').toUpperCase();
+        if (code === 'A1') {
+            return {
+                tmjUrl: '/maps/A1/a1.tmj',
+                tilesBaseUrl: '/maps/tileset/a1/'
+            };
+        }
+        if (code === 'DNG') {
+            return {
+                tmjUrl: '/maps/dungeon1/dungeon1.tmj',
+                tilesBaseUrl: '/maps/dungeon1/tiles/'
+            };
+        }
+        return null;
+    }
+
+    decodeTiledLayerData(layer, mapWidth, mapHeight) {
+        if (Array.isArray(layer?.data)) return layer.data;
+        const encoded = String(layer?.data || '').trim();
+        if (!encoded) return [];
+        const encoding = String(layer?.encoding || '').toLowerCase();
+        if (encoding !== 'base64') return [];
+        const compression = String(layer?.compression || '').toLowerCase();
+        if (compression) return [];
+        try {
+            const binary = atob(encoded);
+            const max = Math.min(binary.length >>> 2, Math.max(1, Number(mapWidth || 1) * Number(mapHeight || 1)));
+            const out = new Array(max);
+            for (let i = 0; i < max; i++) {
+                const b = i * 4;
+                out[i] = (
+                    binary.charCodeAt(b)
+                    | (binary.charCodeAt(b + 1) << 8)
+                    | (binary.charCodeAt(b + 2) << 16)
+                    | (binary.charCodeAt(b + 3) << 24)
+                ) >>> 0;
+            }
+            return out;
+        } catch {
+            return [];
+        }
+    }
+
+    resolveTiledImageCandidates(source, basename, mapCode, tmjUrl, tilesBaseUrl) {
+        const out = [];
+        const direct = new URL(source, `https://noxis.local${tmjUrl}`).pathname;
+        out.push(direct);
+        out.push(`${String(tilesBaseUrl || '/').replace(/\/+$/, '')}/${basename}`);
+        if (mapCode === 'DNG') {
+            out.push(`/maps/dungeon1/assets/${basename}`);
+            out.push(`/maps/tileset/a1/${basename}`);
+        }
+        return [...new Set(out)];
     }
 
     /**
@@ -4710,21 +4842,38 @@ export class Game {
             row.className = 'party-notify-row';
             const readyCount = Math.max(0, Number(req.readyCount || 0));
             const totalCount = Math.max(1, Number(req.totalCount || 1));
-            row.innerHTML = `<div>Ready Check: ${this.escapeHtml(String(req.dungeonName || 'Expedicao'))} (${readyCount}/${totalCount})</div>`;
-            const actions = document.createElement('div');
-            actions.className = 'party-notify-actions';
-            const acceptBtn = document.createElement('button');
-            acceptBtn.textContent = 'Aceitar';
-            acceptBtn.disabled = Boolean(req.respondedByMe);
-            acceptBtn.addEventListener('click', () => this.resolveDungeonReadyCheck(req, true));
-            const declineBtn = document.createElement('button');
-            declineBtn.textContent = 'Recusar';
-            declineBtn.disabled = Boolean(req.respondedByMe);
-            declineBtn.addEventListener('click', () => this.resolveDungeonReadyCheck(req, false));
-            actions.appendChild(acceptBtn);
-            actions.appendChild(declineBtn);
-            row.appendChild(actions);
-            if (req.respondedByMe) {
+            const title = req.purpose === 'teleport'
+                ? `Entrada na Dungeon: ${this.escapeHtml(String(req.dungeonName || 'Expedicao'))} (${readyCount}/${totalCount})`
+                : `Abertura da Dungeon: ${this.escapeHtml(String(req.dungeonName || 'Expedicao'))} (${readyCount}/${totalCount})`;
+            row.innerHTML = `<div>${title}</div>`;
+            const isTeleportQueued = Number.isFinite(Number(req.teleportAt)) && Number(req.teleportAt) > now;
+            if (!isTeleportQueued) {
+                const voteCountdown = Math.max(0, Math.ceil((Number(req.expiresAt || now) - now) / 1000));
+                const timerLine = document.createElement('div');
+                timerLine.className = 'quest-objective';
+                timerLine.textContent = `Tempo para votar: ${voteCountdown}s`;
+                row.appendChild(timerLine);
+            }
+            if (!req.respondedByMe && !isTeleportQueued) {
+                const actions = document.createElement('div');
+                actions.className = 'party-notify-actions';
+                const acceptBtn = document.createElement('button');
+                acceptBtn.textContent = 'Aceitar';
+                acceptBtn.addEventListener('click', () => this.resolveDungeonReadyCheck(req, true));
+                const declineBtn = document.createElement('button');
+                declineBtn.textContent = 'Recusar';
+                declineBtn.addEventListener('click', () => this.resolveDungeonReadyCheck(req, false));
+                actions.appendChild(acceptBtn);
+                actions.appendChild(declineBtn);
+                row.appendChild(actions);
+            }
+            if (isTeleportQueued && req.acceptedByMe) {
+                const countdown = Math.max(0, Math.ceil((Number(req.teleportAt) - now) / 1000));
+                const waiting = document.createElement('div');
+                waiting.className = 'quest-objective';
+                waiting.textContent = `Entrando em ${countdown}s...`;
+                row.appendChild(waiting);
+            } else if (req.respondedByMe) {
                 const waiting = document.createElement('div');
                 waiting.className = 'quest-objective';
                 waiting.textContent = 'Resposta enviada. Aguardando restantes...';
@@ -4746,6 +4895,14 @@ export class Game {
 
     resolveDungeonReadyCheck(req, accept) {
         req.respondedByMe = true;
+        req.acceptedByMe = Boolean(accept);
+        if (accept && String(req.purpose || '') === 'teleport') {
+            req.teleportAt = Date.now() + 10000;
+            req.expiresAt = Number(req.teleportAt) + 1500;
+        }
+        if (!accept) {
+            this.pendingDungeonReadyChecks = this.pendingDungeonReadyChecks.filter((it) => it.requestId !== req.requestId);
+        }
         this.renderDungeonNotifications();
         this.network.send({
             type: 'dungeon.ready',
@@ -4923,7 +5080,7 @@ export class Game {
         if (!this.localId || !this.players[this.localId]) return;
         const me = this.players[this.localId];
 
-        if (!(this.currentMapCode === 'A1' && this.hasTiledLayout('A1'))) {
+        if (!this.hasTiledLayout(this.currentMapCode)) {
             for (const feature of this.mapFeatures || []) {
                 if (!feature || !feature.collision) continue;
                 ctx.strokeStyle = 'rgba(255, 70, 70, 0.95)';
@@ -5121,8 +5278,9 @@ export class Game {
         const theme = this.currentMapTheme || 'forest';
         if (this.mapTiles && this.mapCols === cols && this.mapRows === rows && this.mapVisualTheme === theme) return;
 
-        if (this.currentMapCode === 'A1' && this.hasTiledLayout('A1')) {
-            const tiled = this.tiledMapLayouts.A1;
+        if (this.hasTiledLayout(this.currentMapCode)) {
+            const code = String(this.currentMapCode || '').toUpperCase();
+            const tiled = this.tiledMapLayouts[code];
             this.mapCols = cols;
             this.mapRows = rows;
             this.mapVisualTheme = theme;
@@ -5337,7 +5495,7 @@ export class Game {
     }
 
     drawMapFeatures(ctx, worldRect, sx = 1, sy = 1, previewMode = false) {
-        if (this.currentMapCode === 'A1' && this.hasTiledLayout('A1')) return;
+        if (this.hasTiledLayout(this.currentMapCode)) return;
         if (!Array.isArray(this.mapFeatures) || !this.mapFeatures.length) return;
         const isIso = this.isIsometricMap();
         for (const feature of this.mapFeatures) {
@@ -5792,7 +5950,7 @@ export class Game {
     }
 
     drawTiledTerrain(ctx, worldRect, sx = 1, sy = 1) {
-        const cache = this.ensureTiledRenderCache('A1');
+        const cache = this.ensureTiledRenderCache(this.currentMapCode);
         if (!cache || !cache.canvas) return false;
         const srcX = Math.max(0, Math.floor(worldRect.x));
         const srcY = Math.max(0, Math.floor(worldRect.y));
@@ -5815,7 +5973,7 @@ export class Game {
 
     ensureTiledRenderCache(mapCode = this.currentMapCode) {
         const code = String(mapCode || '').toUpperCase();
-        if (!this.shouldRenderTiledMap() || code !== 'A1') return null;
+        if (!this.shouldRenderTiledMap()) return null;
         const cached = this.tiledRenderCache[code];
         if (cached?.ready && cached.canvas) return cached;
 
@@ -6886,7 +7044,7 @@ export class Game {
         this.ctx.save();
 
         // Contorno das areas de colisao configuradas no mapa.
-        if (!(this.currentMapCode === 'A1' && this.hasTiledLayout('A1'))) {
+        if (!this.hasTiledLayout(this.currentMapCode)) {
             for (const feature of this.mapFeatures || []) {
                 if (!feature || !feature.collision) continue;
                 this.ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';

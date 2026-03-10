@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { PlayerRuntime } from '../models/types';
 import { DungeonTemplate, DUNGEON_BY_ENTRY_NPC, DUNGEON_BY_ID } from '../content/dungeons';
 import { clamp, distance } from '../utils/math';
-import { MAP_FEATURES_BY_KEY, WORLD, composeMapInstanceId } from '../config';
+import { WORLD, composeMapInstanceId } from '../config';
 import { DungeonMap } from './DungeonMap';
 import { generateDungeonLayout } from './ProceduralDungeonGenerator';
 
@@ -27,6 +27,8 @@ const DUNGEON_EMPTY_TIMEOUT_MS = 20_000;
 const DUNGEON_CLEANUP_AFTER_COMPLETE_MS = 5 * 60_000;
 const DUNGEON_ENTRY_RANGE = 190;
 const READY_CHECK_TIMEOUT_MS = 15_000;
+const TELEPORT_READY_CHECK_TIMEOUT_MS = 8_000;
+const TELEPORT_ACCEPT_DELAY_MS = 10_000;
 
 export class DungeonService {
     private readonly instances = new Map<string, DungeonMap>();
@@ -34,6 +36,7 @@ export class DungeonService {
     private readonly partyToOpenInstanceId = new Map<string, string>();
     private readonly emptySince = new Map<string, number>();
     private readonly readyCheckToInstanceId = new Map<string, string>();
+    private readonly pendingTeleportByRequestId = new Map<string, { instanceId: string; acceptedIds: number[]; teleportAt: number }>();
 
     constructor(
         private readonly players: Map<number, PlayerRuntime>,
@@ -56,6 +59,16 @@ export class DungeonService {
             name: template.name,
             description: template.description,
             maxPlayers: template.maxPlayers
+        };
+    }
+
+    getNpcUiStateForPlayer(player: PlayerRuntime, npcId: string) {
+        const template = DUNGEON_BY_ENTRY_NPC[String(npcId || '')];
+        if (!template) return null;
+        const partyId = String(player.partyId || '');
+        const opened = partyId ? Boolean(this.getOpenInstanceForParty(partyId)) : false;
+        return {
+            opened
         };
     }
 
@@ -113,7 +126,14 @@ export class DungeonService {
         const partyId = String(player.partyId || '');
         if (!partyId) return { ok: false, message: 'Entrada permitida apenas para jogadores em grupo.' };
         const opened = this.getOpenInstanceForParty(partyId);
-        const mode = String(modeRaw || '').toLowerCase() === 'group' ? 'group' : String(modeRaw || '').toLowerCase() === 'solo' ? 'solo' : 'self';
+        const modeValue = String(modeRaw || '').toLowerCase();
+        const mode = modeValue === 'group'
+            ? 'group'
+            : modeValue === 'solo'
+                ? 'solo'
+                : modeValue === 'open'
+                    ? 'open'
+                    : 'self';
         if (!opened) {
             return this.startReadyCheck(player, entry.templateId);
         }
@@ -188,6 +208,7 @@ export class DungeonService {
                 this.cleanupInstance(instance, 'completed_cleanup');
             }
         }
+        this.tickPendingTeleports(now);
     }
 
     private startReadyCheck(leader: PlayerRuntime, templateId: string) {
@@ -220,6 +241,7 @@ export class DungeonService {
             this.sendRaw(member.ws, {
                 type: 'dungeon.readyCheck',
                 requestId: instance.readyCheckId,
+                purpose: 'open',
                 dungeon: {
                     templateId: template.id,
                     name: template.name,
@@ -248,7 +270,6 @@ export class DungeonService {
         instance.doorFeature = layout.doorFeature;
         instance.entrySpawn = { x: Number(layout.entrySpawn.x), y: Number(layout.entrySpawn.y) };
         instance.bossAggroRange = Math.max(80, Number(layout.bossAggroRange || 260));
-        MAP_FEATURES_BY_KEY[instance.mapKey] = [...layout.features];
         for (const member of members) {
             instance.addPlayer(member.id, {
                 mapKey: String(member.mapKey || 'forest'),
@@ -309,9 +330,30 @@ export class DungeonService {
         instance.state = 'ready_check';
         instance.readyPurpose = 'teleport';
         instance.readyCheckId = `RDY-${randomUUID().slice(0, 8)}`;
-        instance.readyDeadlineAt = Date.now() + READY_CHECK_TIMEOUT_MS;
+        instance.readyDeadlineAt = Date.now() + TELEPORT_READY_CHECK_TIMEOUT_MS;
         instance.readyMemberIds = members.map((m) => m.id);
         this.readyCheckToInstanceId.set(String(instance.readyCheckId), instance.id);
+        for (const memberId of instance.readyMemberIds) {
+            const member = this.players.get(memberId);
+            if (!member) continue;
+            this.sendRaw(member.ws, {
+                type: 'dungeon.readyCheck',
+                requestId: instance.readyCheckId,
+                purpose: 'teleport',
+                dungeon: {
+                    templateId: instance.template.id,
+                    name: instance.template.name,
+                    maxPlayers: instance.template.maxPlayers
+                },
+                timeoutMs: TELEPORT_READY_CHECK_TIMEOUT_MS,
+                members: instance.readyMemberIds.map((id) => ({
+                    playerId: id,
+                    name: this.players.get(id)?.name || `#${id}`,
+                    ready: Boolean(instance.players.get(id)?.ready),
+                    responded: Boolean(instance.players.get(id)?.responded)
+                }))
+            });
+        }
         this.broadcastReadyState(instance, instance.readyMemberIds);
         return { ok: true, message: 'Ready Check de teleporte iniciado.', requestId: instance.readyCheckId };
     }
@@ -409,16 +451,31 @@ export class DungeonService {
                 text: 'Ready Check finalizado: voce nao foi teleportado.'
             });
         }
-        this.ensureInstanceActive(instance);
+        const teleportAt = Date.now() + TELEPORT_ACCEPT_DELAY_MS;
+        const readyId = String(instance.readyCheckId || '');
+        if (readyId && acceptedIds.length > 0) {
+            this.pendingTeleportByRequestId.set(readyId, {
+                instanceId: instance.id,
+                acceptedIds: [...acceptedIds],
+                teleportAt
+            });
+            this.broadcastReadyState(instance, instance.readyMemberIds, {
+                phase: 'teleport_queued',
+                teleportAt
+            });
+        }
         for (const memberId of acceptedIds) {
             const member = this.players.get(memberId);
             if (!member) continue;
-            this.teleportPlayerIntoInstance(member, instance);
+            this.sendRaw(member.ws, {
+                type: 'system_message',
+                text: `Entrada confirmada. Teleporte em ${Math.floor(TELEPORT_ACCEPT_DELAY_MS / 1000)}s.`
+            });
         }
         this.destroyReadyCheck(instance);
     }
 
-    private broadcastReadyState(instance: DungeonMap, targetMemberIds?: number[]) {
+    private broadcastReadyState(instance: DungeonMap, targetMemberIds?: number[], extraPayload: Record<string, any> = {}) {
         if (!instance.readyCheckId) return;
         const memberIds = Array.isArray(targetMemberIds) && targetMemberIds.length
             ? targetMemberIds
@@ -431,12 +488,31 @@ export class DungeonService {
                 name: this.players.get(id)?.name || `#${id}`,
                 ready: Boolean(instance.players.get(id)?.ready),
                 responded: Boolean(instance.players.get(id)?.responded)
-            }))
+            })),
+            ...extraPayload
         };
         for (const memberId of memberIds) {
             const member = this.players.get(memberId);
             if (!member) continue;
             this.sendRaw(member.ws, payload);
+        }
+    }
+
+    private tickPendingTeleports(now: number) {
+        for (const [requestId, pending] of this.pendingTeleportByRequestId.entries()) {
+            if (now < Number(pending.teleportAt || 0)) continue;
+            const instance = this.instances.get(String(pending.instanceId || ''));
+            if (!instance) {
+                this.pendingTeleportByRequestId.delete(requestId);
+                continue;
+            }
+            this.ensureInstanceActive(instance);
+            for (const memberId of pending.acceptedIds) {
+                const member = this.players.get(memberId);
+                if (!member) continue;
+                this.teleportPlayerIntoInstance(member, instance);
+            }
+            this.pendingTeleportByRequestId.delete(requestId);
         }
     }
 
@@ -464,10 +540,11 @@ export class DungeonService {
 
     private movePlayerToInstance(player: PlayerRuntime, instance: DungeonMap) {
         const spawnBase = instance.entrySpawn || instance.template.entrySpawn;
+        const jitter = String(instance.mapKey || '').startsWith('dng_') ? 0 : 20;
         const spawn = this.projectToWalkable(
             instance.mapKey,
-            clamp(Number(spawnBase.x || 0) + (Math.random() * 40 - 20), 0, WORLD.width),
-            clamp(Number(spawnBase.y || 0) + (Math.random() * 40 - 20), 0, WORLD.height)
+            clamp(Number(spawnBase.x || 0) + (Math.random() * (jitter * 2) - jitter), 0, WORLD.width),
+            clamp(Number(spawnBase.y || 0) + (Math.random() * (jitter * 2) - jitter), 0, WORLD.height)
         );
         player.mapKey = instance.mapKey;
         player.mapId = instance.mapId;
@@ -489,16 +566,21 @@ export class DungeonService {
 
     private spawnTemplateMobs(instance: DungeonMap, spawns: any[]) {
         for (const def of spawns) {
+            const projected = this.projectToWalkable(
+                instance.mapKey,
+                clamp(Number(def.x || 0), 0, WORLD.width),
+                clamp(Number(def.y || 0), 0, WORLD.height)
+            );
             const spawned = this.mobService.createMobWithOverrides(
                 String(def.kind || 'normal'),
                 instance.mapInstanceId,
                 {
-                    x: Number(def.x || 0),
-                    y: Number(def.y || 0),
-                    homeX: Number(def.x || 0),
-                    homeY: Number(def.y || 0),
-                    spawnX: Number(def.x || 0),
-                    spawnY: Number(def.y || 0),
+                    x: projected.x,
+                    y: projected.y,
+                    homeX: projected.x,
+                    homeY: projected.y,
+                    spawnX: projected.x,
+                    spawnY: projected.y,
                     noRespawn: true,
                     eventId: instance.id,
                     eventName: instance.template.id,
@@ -658,12 +740,12 @@ export class DungeonService {
     }
 
     private cleanupInstance(instance: DungeonMap, reason: string) {
+        this.clearPendingTeleportsForInstance(instance.id);
         for (const mobRuntime of instance.mobs.values()) {
             if (!mobRuntime.runtimeId) continue;
             this.mobService.removeMob(String(mobRuntime.runtimeId), { skipRespawn: true });
         }
         this.removeGroundItemsByMapInstance(instance.mapInstanceId);
-        delete MAP_FEATURES_BY_KEY[instance.mapKey];
         for (const memberState of instance.players.values()) {
             const member = this.players.get(memberState.playerId);
             if (!member) continue;
@@ -682,6 +764,13 @@ export class DungeonService {
         if (instance.ownerPartyId) this.partyToOpenInstanceId.delete(instance.ownerPartyId);
         this.emptySince.delete(instance.id);
         this.instances.delete(instance.id);
+    }
+
+    private clearPendingTeleportsForInstance(instanceId: string) {
+        for (const [requestId, pending] of this.pendingTeleportByRequestId.entries()) {
+            if (String(pending.instanceId || '') !== String(instanceId || '')) continue;
+            this.pendingTeleportByRequestId.delete(requestId);
+        }
     }
 
     private teleportPlayerToOrigin(player: PlayerRuntime, instance: DungeonMap) {
@@ -749,13 +838,11 @@ export class DungeonService {
     }
 
     private setBossDoorLocked(instance: DungeonMap, locked: boolean) {
-        if (!instance.doorFeature) return;
+        if (!instance.doorFeature) {
+            instance.doorLocked = locked;
+            return;
+        }
         if (instance.doorLocked === locked) return;
         instance.doorLocked = locked;
-        const current = Array.isArray(MAP_FEATURES_BY_KEY[instance.mapKey]) ? MAP_FEATURES_BY_KEY[instance.mapKey] : [];
-        const withoutDoor = current.filter((f) => String((f as any)?.id || '') !== String(instance.doorFeature?.id || ''));
-        MAP_FEATURES_BY_KEY[instance.mapKey] = locked
-            ? [...withoutDoor, instance.doorFeature]
-            : withoutDoor;
     }
 }

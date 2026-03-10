@@ -9,6 +9,7 @@ type GrantXpFn = (player: PlayerRuntime, amount: number, context?: {
 }) => void;
 type GrantItemFn = (player: PlayerRuntime, templateId: string, quantity: number) => number;
 type GrantCurrencyFn = (player: PlayerRuntime, reward: Partial<Wallet>, sourceLabel: string) => void;
+type GetDungeonUiStateFn = (player: PlayerRuntime, npcId: string) => Record<string, any> | null;
 export declare class QuestService {
     private readonly sendRaw;
     private readonly persistPlayer;
@@ -16,7 +17,8 @@ export declare class QuestService {
     private readonly grantXp;
     private readonly grantRewardItem;
     private readonly grantCurrency;
-    constructor(sendRaw: SendRawFn, persistPlayer: PersistPlayerFn, persistPlayerCritical: PersistPlayerCriticalFn, grantXp: GrantXpFn, grantRewardItem: GrantItemFn, grantCurrency: GrantCurrencyFn);
+    private readonly getDungeonUiState?;
+    constructor(sendRaw: SendRawFn, persistPlayer: PersistPlayerFn, persistPlayerCritical: PersistPlayerCriticalFn, grantXp: GrantXpFn, grantRewardItem: GrantItemFn, grantCurrency: GrantCurrencyFn, getDungeonUiState?: GetDungeonUiStateFn | undefined);
     getNpcsForMap(mapKey: string, mapId: string): {
         id: string;
         name: string;
