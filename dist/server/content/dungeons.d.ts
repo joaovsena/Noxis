@@ -18,6 +18,7 @@ export type DungeonTemplate = {
     name: string;
     description: string;
     mapKey: string;
+    mapAssetKey?: string;
     maxPlayers: number;
     entryNpcId?: string;
     entryPortalId?: string;

@@ -19,6 +19,7 @@ const DungeonService_1 = require("../services/DungeonService");
 const hash_1 = require("../utils/hash");
 const math_1 = require("../utils/math");
 const currency_1 = require("../utils/currency");
+const mapMetadata_1 = require("../maps/mapMetadata");
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const PRIMARY_STATS = ['str', 'int', 'dex', 'vit'];
@@ -332,10 +333,22 @@ class GameController {
             this.players.set(player.id, player);
             this.usernameToPlayerId.set(username, player.id);
             ws.playerId = player.id;
+            const mapMetadata = (0, mapMetadata_1.getMapMetadata)(player.mapKey);
             ws.send(JSON.stringify({
                 type: 'auth_success',
                 playerId: player.id,
-                world: config_1.WORLD,
+                world: mapMetadata?.world || config_1.WORLD,
+                mapTiled: mapMetadata
+                    ? {
+                        mapCode: mapMetadata.mapCode,
+                        assetKey: mapMetadata.assetKey,
+                        tmjUrl: mapMetadata.tmjUrl,
+                        tilesBaseUrl: mapMetadata.tilesBaseUrl,
+                        orientation: mapMetadata.orientation,
+                        worldTileSize: mapMetadata.worldTileSize,
+                        worldScale: mapMetadata.worldScale
+                    }
+                    : null,
                 role: player.role,
                 statusIds: config_1.STATUS_IDS,
                 hotbarBindings: this.getPlayerHotbarBindings(player)
@@ -434,7 +447,8 @@ class GameController {
     createRuntimePlayer(username, profile) {
         const mapKey = config_1.MAP_KEYS.includes(profile?.mapKey) ? profile.mapKey : config_1.DEFAULT_MAP_KEY;
         const mapId = config_1.MAP_IDS.includes(profile?.mapId) ? profile.mapId : config_1.DEFAULT_MAP_ID;
-        const spawn = this.projectToWalkable(mapKey, (0, math_1.clamp)(Number.isFinite(Number(profile?.posX)) ? Number(profile.posX) : 500, 0, config_1.WORLD.width), (0, math_1.clamp)(Number.isFinite(Number(profile?.posY)) ? Number(profile.posY) : 500, 0, config_1.WORLD.height));
+        const mapWorld = this.mapService.getMapWorld(mapKey);
+        const spawn = this.projectToWalkable(mapKey, (0, math_1.clamp)(Number.isFinite(Number(profile?.posX)) ? Number(profile.posX) : 500, 0, mapWorld.width), (0, math_1.clamp)(Number.isFinite(Number(profile?.posY)) ? Number(profile.posY) : 500, 0, mapWorld.height));
         const parsedId = Number(profile?.id);
         const id = Number.isInteger(parsedId) ? parsedId : Math.floor(Date.now() % 2147483647);
         const normalizedClass = this.normalizeClassId(profile?.class);
@@ -663,7 +677,8 @@ class GameController {
                 return;
             }
             target.mapKey = mapKey;
-            const projected = this.projectToWalkable(target.mapKey, (0, math_1.clamp)(target.x, 0, config_1.WORLD.width), (0, math_1.clamp)(target.y, 0, config_1.WORLD.height));
+            const targetWorld = this.mapService.getMapWorld(target.mapKey);
+            const projected = this.projectToWalkable(target.mapKey, (0, math_1.clamp)(target.x, 0, targetWorld.width), (0, math_1.clamp)(target.y, 0, targetWorld.height));
             target.x = projected.x;
             target.y = projected.y;
             target.targetX = target.x;
@@ -690,7 +705,8 @@ class GameController {
             }
             player.mapKey = target.mapKey;
             player.mapId = target.mapId;
-            const projected = this.projectToWalkable(player.mapKey, (0, math_1.clamp)(target.x, 0, config_1.WORLD.width), (0, math_1.clamp)(target.y, 0, config_1.WORLD.height));
+            const playerWorld = this.mapService.getMapWorld(player.mapKey);
+            const projected = this.projectToWalkable(player.mapKey, (0, math_1.clamp)(target.x, 0, playerWorld.width), (0, math_1.clamp)(target.y, 0, playerWorld.height));
             player.x = projected.x;
             player.y = projected.y;
             player.targetX = player.x;
@@ -716,7 +732,8 @@ class GameController {
             }
             target.mapKey = player.mapKey;
             target.mapId = player.mapId;
-            const projected = this.projectToWalkable(target.mapKey, (0, math_1.clamp)(player.x, 0, config_1.WORLD.width), (0, math_1.clamp)(player.y, 0, config_1.WORLD.height));
+            const summonWorld = this.mapService.getMapWorld(target.mapKey);
+            const projected = this.projectToWalkable(target.mapKey, (0, math_1.clamp)(player.x, 0, summonWorld.width), (0, math_1.clamp)(player.y, 0, summonWorld.height));
             target.x = projected.x;
             target.y = projected.y;
             target.targetX = target.x;
@@ -961,7 +978,8 @@ class GameController {
         player.hp = player.maxHp;
         const reviveX = Number.isFinite(Number(player.deathX)) ? Number(player.deathX) : player.x;
         const reviveY = Number.isFinite(Number(player.deathY)) ? Number(player.deathY) : player.y;
-        const projected = this.projectToWalkable(player.mapKey, (0, math_1.clamp)(reviveX, 0, config_1.WORLD.width), (0, math_1.clamp)(reviveY, 0, config_1.WORLD.height));
+        const mapWorld = this.mapService.getMapWorld(player.mapKey);
+        const projected = this.projectToWalkable(player.mapKey, (0, math_1.clamp)(reviveX, 0, mapWorld.width), (0, math_1.clamp)(reviveY, 0, mapWorld.height));
         player.x = projected.x;
         player.y = projected.y;
         player.targetX = player.x;
@@ -1211,6 +1229,7 @@ class GameController {
         const mapInstanceId = this.mapInstanceId(mapKey, mapId);
         const hasTiledCollision = Boolean(this.getMapTiledCollisionSampler(mapKey));
         const isDungeonMap = String(mapKey || '').startsWith('dng_');
+        const mapMetadata = (0, mapMetadata_1.getMapMetadata)(mapKey);
         const publicPlayers = {};
         for (const [id, player] of this.players.entries()) {
             if (player.mapId !== mapId || player.mapKey !== mapKey)
@@ -1222,7 +1241,7 @@ class GameController {
             players: publicPlayers,
             mobs: this.mobService.getMobsByMap(mapInstanceId),
             groundItems: this.groundItems.filter((it) => it.mapId === mapInstanceId),
-            mapCode: (0, config_1.mapCodeFromKey)(mapKey),
+            mapCode: mapMetadata?.mapCode || (0, config_1.mapCodeFromKey)(mapKey),
             mapKey,
             mapTheme: isDungeonMap ? 'undead' : (config_1.MAP_THEMES[mapKey] || 'forest'),
             mapFeatures: hasTiledCollision ? [] : (config_1.MAP_FEATURES_BY_KEY[mapKey] || []),
@@ -1230,7 +1249,18 @@ class GameController {
             activeEvents: this.eventService.getActiveEventsForMap(mapKey, mapId),
             portals: config_1.PORTALS_BY_MAP_KEY[mapKey] || [],
             mapId,
-            world: config_1.WORLD
+            world: mapMetadata?.world || config_1.WORLD,
+            mapTiled: mapMetadata
+                ? {
+                    mapCode: mapMetadata.mapCode,
+                    assetKey: mapMetadata.assetKey,
+                    tmjUrl: mapMetadata.tmjUrl,
+                    tilesBaseUrl: mapMetadata.tilesBaseUrl,
+                    orientation: mapMetadata.orientation,
+                    worldTileSize: mapMetadata.worldTileSize,
+                    worldScale: mapMetadata.worldScale
+                }
+                : null
         };
     }
     getPlayerByRuntimeId(playerId) {
@@ -1687,7 +1717,8 @@ class GameController {
         this.grantCurrency(player, reward, 'Recompensa de mob');
     }
     computeLootDropPosition(originX, originY, dropIndex, dropTotal, mapKey) {
-        const center = this.projectToWalkable(mapKey, (0, math_1.clamp)(Number(originX || 0), 0, config_1.WORLD.width), (0, math_1.clamp)(Number(originY || 0), 0, config_1.WORLD.height));
+        const mapWorld = this.mapService.getMapWorld(mapKey);
+        const center = this.projectToWalkable(mapKey, (0, math_1.clamp)(Number(originX || 0), 0, mapWorld.width), (0, math_1.clamp)(Number(originY || 0), 0, mapWorld.height));
         if (dropTotal <= 1 || dropIndex <= 0)
             return center;
         const ringIndex = Math.ceil(Math.sqrt(dropIndex));

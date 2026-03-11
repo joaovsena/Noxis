@@ -11,6 +11,7 @@ export declare class MovementService {
     movePlayerTowardTarget(player: PlayerRuntime, deltaSeconds: number, now: number): void;
     assignPathTo(player: PlayerRuntime, destinationX: number, destinationY: number): void;
     recalculatePathToward(player: PlayerRuntime, destinationX: number, destinationY: number, now: number): void;
+    private advancePathAfterNode;
     private getIsoMoveStepMultiplier;
     private isDungeonMap;
     private getPathfindBudgetMs;

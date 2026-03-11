@@ -337,7 +337,7 @@ export interface QuestCompleteMessage {
 export interface DungeonEnterMessage {
     type: 'dungeon.enter';
     npcId: string;
-    mode?: 'solo' | 'group';
+    mode?: 'solo' | 'group' | 'open';
 }
 export interface DungeonReadyMessage {
     type: 'dungeon.ready';

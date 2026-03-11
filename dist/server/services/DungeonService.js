@@ -106,7 +106,14 @@ class DungeonService {
         if (!partyId)
             return { ok: false, message: 'Entrada permitida apenas para jogadores em grupo.' };
         const opened = this.getOpenInstanceForParty(partyId);
-        const mode = String(modeRaw || '').toLowerCase() === 'group' ? 'group' : String(modeRaw || '').toLowerCase() === 'solo' ? 'solo' : 'self';
+        const modeValue = String(modeRaw || '').toLowerCase();
+        const mode = modeValue === 'group'
+            ? 'group'
+            : modeValue === 'solo'
+                ? 'solo'
+                : modeValue === 'open'
+                    ? 'open'
+                    : 'self';
         if (!opened) {
             return this.startReadyCheck(player, entry.templateId);
         }
@@ -246,7 +253,6 @@ class DungeonService {
         instance.doorFeature = layout.doorFeature;
         instance.entrySpawn = { x: Number(layout.entrySpawn.x), y: Number(layout.entrySpawn.y) };
         instance.bossAggroRange = Math.max(80, Number(layout.bossAggroRange || 260));
-        config_1.MAP_FEATURES_BY_KEY[instance.mapKey] = [...layout.features];
         for (const member of members) {
             instance.addPlayer(member.id, {
                 mapKey: String(member.mapKey || 'forest'),
@@ -521,7 +527,8 @@ class DungeonService {
     }
     movePlayerToInstance(player, instance) {
         const spawnBase = instance.entrySpawn || instance.template.entrySpawn;
-        const spawn = this.projectToWalkable(instance.mapKey, (0, math_1.clamp)(Number(spawnBase.x || 0) + (Math.random() * 40 - 20), 0, config_1.WORLD.width), (0, math_1.clamp)(Number(spawnBase.y || 0) + (Math.random() * 40 - 20), 0, config_1.WORLD.height));
+        const jitter = String(instance.mapKey || '').startsWith('dng_') ? 0 : 20;
+        const spawn = this.projectToWalkable(instance.mapKey, (0, math_1.clamp)(Number(spawnBase.x || 0) + (Math.random() * (jitter * 2) - jitter), 0, config_1.WORLD.width), (0, math_1.clamp)(Number(spawnBase.y || 0) + (Math.random() * (jitter * 2) - jitter), 0, config_1.WORLD.height));
         player.mapKey = instance.mapKey;
         player.mapId = instance.mapId;
         player.x = spawn.x;
@@ -541,13 +548,14 @@ class DungeonService {
     }
     spawnTemplateMobs(instance, spawns) {
         for (const def of spawns) {
+            const projected = this.projectToWalkable(instance.mapKey, (0, math_1.clamp)(Number(def.x || 0), 0, config_1.WORLD.width), (0, math_1.clamp)(Number(def.y || 0), 0, config_1.WORLD.height));
             const spawned = this.mobService.createMobWithOverrides(String(def.kind || 'normal'), instance.mapInstanceId, {
-                x: Number(def.x || 0),
-                y: Number(def.y || 0),
-                homeX: Number(def.x || 0),
-                homeY: Number(def.y || 0),
-                spawnX: Number(def.x || 0),
-                spawnY: Number(def.y || 0),
+                x: projected.x,
+                y: projected.y,
+                homeX: projected.x,
+                homeY: projected.y,
+                spawnX: projected.x,
+                spawnY: projected.y,
                 noRespawn: true,
                 eventId: instance.id,
                 eventName: instance.template.id,
@@ -700,7 +708,6 @@ class DungeonService {
             this.mobService.removeMob(String(mobRuntime.runtimeId), { skipRespawn: true });
         }
         this.removeGroundItemsByMapInstance(instance.mapInstanceId);
-        delete config_1.MAP_FEATURES_BY_KEY[instance.mapKey];
         for (const memberState of instance.players.values()) {
             const member = this.players.get(memberState.playerId);
             if (!member)
@@ -784,16 +791,13 @@ class DungeonService {
         instance.readyMemberIds = [];
     }
     setBossDoorLocked(instance, locked) {
-        if (!instance.doorFeature)
+        if (!instance.doorFeature) {
+            instance.doorLocked = locked;
             return;
+        }
         if (instance.doorLocked === locked)
             return;
         instance.doorLocked = locked;
-        const current = Array.isArray(config_1.MAP_FEATURES_BY_KEY[instance.mapKey]) ? config_1.MAP_FEATURES_BY_KEY[instance.mapKey] : [];
-        const withoutDoor = current.filter((f) => String(f?.id || '') !== String(instance.doorFeature?.id || ''));
-        config_1.MAP_FEATURES_BY_KEY[instance.mapKey] = locked
-            ? [...withoutDoor, instance.doorFeature]
-            : withoutDoor;
     }
 }
 exports.DungeonService = DungeonService;

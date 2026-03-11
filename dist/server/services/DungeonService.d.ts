@@ -42,7 +42,7 @@ export declare class DungeonService {
         templateId: string;
         mapKey: string;
         mapId: string;
-        state: "active" | "completed" | "ready_check" | "open";
+        state: "open" | "active" | "completed" | "ready_check";
         locked: boolean;
         doorLocked: boolean;
         readyCheckId: string | null;

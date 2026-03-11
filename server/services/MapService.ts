@@ -25,8 +25,10 @@ export class MapService {
     getMapNavGrid(mapKey: string) {
         const metadata = getMapMetadata(mapKey);
         const world = metadata?.world || WORLD;
-        const cols = Math.max(1, Number(metadata?.width || Math.floor(world.width / PATHFIND_CELL_SIZE)));
-        const rows = Math.max(1, Number(metadata?.height || Math.floor(world.height / PATHFIND_CELL_SIZE)));
+        const derivedCols = Math.max(1, Math.floor(world.width / PATHFIND_CELL_SIZE));
+        const derivedRows = Math.max(1, Math.floor(world.height / PATHFIND_CELL_SIZE));
+        const cols = Math.max(derivedCols, Number(metadata?.width || 0) || 0, 1);
+        const rows = Math.max(derivedRows, Number(metadata?.height || 0) || 0, 1);
         return {
             cols,
             rows,

@@ -15,7 +15,7 @@ type DungeonLayout = {
         hpMultiplier?: number;
         level?: number;
     }>;
-    doorFeature: MapFeature;
+    doorFeature: MapFeature | null;
     bossAggroRange: number;
 };
 export declare function generateDungeonLayout(instanceId: string, template: DungeonTemplate): DungeonLayout;

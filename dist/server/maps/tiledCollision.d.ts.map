@@ -1,0 +1,1 @@
+{"version":3,"file":"tiledCollision.d.ts","sourceRoot":"","sources":["../../../server/maps/tiledCollision.ts"],"names":[],"mappings":"AAqCA,KAAK,gBAAgB,GAAG;IACpB,WAAW,EAAE,CAAC,MAAM,EAAE,MAAM,EAAE,MAAM,EAAE,MAAM,EAAE,WAAW,EAAE,MAAM,KAAK,OAAO,CAAC;CACjF,CAAC;AAsCF,wBAAgB,2BAA2B,CAAC,MAAM,EAAE,MAAM,GAAG,gBAAgB,GAAG,IAAI,CAQnF"}

@@ -7,6 +7,7 @@ exports.DUNGEON_TEMPLATES = [
         name: 'Ruinas de Alder',
         description: 'Instancia curta para grupo: limpe os corredores e derrote o Guardiao das Ruinas.',
         mapKey: 'forest',
+        mapAssetKey: 'dungeon1',
         maxPlayers: 4,
         entryNpcId: 'npc_dungeon_warden',
         entryPortalId: 'forest_dungeon_ruins_01',

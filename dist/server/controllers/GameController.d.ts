@@ -155,6 +155,15 @@ export declare class GameController {
             width: number;
             height: number;
         };
+        mapTiled: {
+            mapCode: string;
+            assetKey: string;
+            tmjUrl: string;
+            tilesBaseUrl: string;
+            orientation: string;
+            worldTileSize: number;
+            worldScale: number;
+        } | null;
     };
     getPlayerByRuntimeId(playerId: number): PlayerRuntime | undefined;
     handleDisconnect(playerId: number): Promise<void>;
@@ -248,7 +257,7 @@ export declare class GameController {
     flushAllPlayers(reason?: string): Promise<void>;
     processPersistenceQueue(limit?: number): Promise<{
         processed: number;
-        fetched: any;
+        fetched: number;
     }>;
     private flushAutosavePlayers;
     private flushDirtyPlayers;

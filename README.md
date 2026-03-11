@@ -50,8 +50,8 @@ docker compose up --build -d
 
 ## O que acontece ao subir
 No container `app`, o entrypoint executa:
-1. `prisma db push --skip-generate`
-2. `prisma generate`
+1. `prisma db push` (se `PRISMA_DB_PUSH=1`)
+2. `prisma generate` apenas se o client nao existir
 3. `node dist/server/index.js`
 
 Ou seja: schema sincronizado automaticamente e servidor iniciado em `http://localhost:3000`.
@@ -98,3 +98,15 @@ Ha um POC de engine em Go para calculos CPU-heavy (combate/pathfinding):
 - `inventory_delete`
 - `switch_instance`
 - `admin_command`
+
+
+## Docker local config
+Para evitar problemas com `C:\Users\Sena\.docker\config.json`, o projeto inclui uma config local em `.docker-local\config.json` e scripts prontos:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-up.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-ps.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-logs.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-down.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-restart.ps1
+```

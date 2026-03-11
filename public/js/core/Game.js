@@ -1,6 +1,10 @@
 import { Network } from './Network.js';
 import { Sprites } from './Sprites.js';
 
+const TILED_GID_MASK = 0x1fffffff;
+const TILED_GID_FLIP_MASK = 0xe0000000;
+const TILED_WALL_LAYER_NAMES = new Set(['paredes', 'walls', 'wall', 'collision', 'colisao', 'collisions']);
+
 export class Game {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
@@ -293,6 +297,7 @@ export class Game {
         this.tiledTilesets = {};
         this.tiledTilesetLoadState = {};
         this.tiledRenderCache = {};
+        this.tiledCollisionDebugCache = {};
         this.tiledMapConfigs = {};
         this.forestDecor = [];
         this.minimapViewSize = 1850;
@@ -3754,6 +3759,22 @@ export class Game {
         };
     }
 
+    tiledObjectToWorldCoords(layout, objectX, objectY) {
+        const mapLayout = layout || this.tiledMapLayouts?.[String(this.currentMapCode || '').toUpperCase()];
+        if (String(mapLayout?.orientation || '').toLowerCase() === 'isometric') {
+            const mapWidth = Math.max(1, Number(mapLayout?.width || 1));
+            const mapHeight = Math.max(1, Number(mapLayout?.height || 1));
+            const tileHeight = Math.max(1, Number(mapLayout?.tileheight || 1));
+            const gx = (Number(objectX || 0) + Number(objectY || 0)) / tileHeight;
+            const gy = (Number(objectY || 0) - Number(objectX || 0)) / tileHeight;
+            return {
+                x: (gx / Math.max(1, mapWidth - 1)) * this.mapWidth,
+                y: (gy / Math.max(1, mapHeight - 1)) * this.mapHeight
+            };
+        }
+        return this.renderToWorldCoords(objectX, objectY);
+    }
+
     renderToWorldCoords(renderX, renderY) {
         if (!this.isIsometricMap()) {
             return {
@@ -3774,8 +3795,8 @@ export class Game {
         const nx = (isoY / Math.max(0.0001, cfg.halfH) + isoX / Math.max(0.0001, cfg.halfW)) * 0.5;
         const ny = (isoY / Math.max(0.0001, cfg.halfH) - isoX / Math.max(0.0001, cfg.halfW)) * 0.5;
         return {
-            x: Math.max(0, Math.min(this.mapWidth, (nx / Math.max(1, cfg.mapW - 1)) * this.mapWidth)),
-            y: Math.max(0, Math.min(this.mapHeight, (ny / Math.max(1, cfg.mapH - 1)) * this.mapHeight))
+            x: (nx / Math.max(1, cfg.mapW - 1)) * this.mapWidth,
+            y: (ny / Math.max(1, cfg.mapH - 1)) * this.mapHeight
         };
     }
 
@@ -3811,6 +3832,7 @@ export class Game {
             this.tiledMapLayouts[code] = { width, height, tilewidth, tileheight, orientation, layers, tilesets };
             await this.loadTiledTilesetForMap(code, tmj, mapConfig.tmjUrl, mapConfig.tilesBaseUrl);
             delete this.tiledRenderCache[code];
+            delete this.tiledCollisionDebugCache[code];
             this.tiledMapLoadState[code] = 'ready';
             if (this.currentMapCode === code) {
                 this.mapTiles = null;
@@ -3846,6 +3868,7 @@ export class Game {
                 sets
             };
             delete this.tiledRenderCache[code];
+            delete this.tiledCollisionDebugCache[code];
             this.tiledTilesetLoadState[code] = 'ready';
         } catch {
             this.tiledTilesetLoadState[code] = 'failed';
@@ -3854,6 +3877,10 @@ export class Game {
 
     parseTsxTileImages(tsxText, options = {}) {
         const out = {};
+        const collisionTileIds = new Set();
+        const collisionPolygonsByTileId = new Map();
+        const imageSizeByTileId = new Map();
+        const imageNameByTileId = new Map();
         const text = String(tsxText || '');
         const mapCode = String(options?.mapCode || this.currentMapCode || '').toUpperCase();
         const mapConfig = this.getTiledMapConfig(mapCode) || {};
@@ -3876,6 +3903,7 @@ export class Game {
                 const source = String(imageMatch[1]);
                 const basename = source.split('/').pop()?.split('\\').pop();
                 if (basename) {
+                    imageNameByTileId.set(localId, basename);
                     const srcCandidates = this.resolveTiledImageCandidates(source, basename, mapCode, tmjUrl, tilesBaseUrl);
                     const img = new Image();
                     let idx = 0;
@@ -3888,9 +3916,60 @@ export class Game {
                     out[localId] = img;
                 }
             }
+            const imageSizeMatch = block.match(/<image\s+[^>]*width="(\d+)"\s+height="(\d+)"/);
+            if (imageSizeMatch) {
+                imageSizeByTileId.set(localId, {
+                    width: Math.max(1, Math.floor(Number(imageSizeMatch[1] || 1))),
+                    height: Math.max(1, Math.floor(Number(imageSizeMatch[2] || 1)))
+                });
+            }
+            if (block.includes('<objectgroup') && block.includes('<object')) {
+                collisionTileIds.add(localId);
+                const polys = [];
+                const objectRegex = /<object\b([^>]*)>([\s\S]*?)<\/object>/g;
+                let objectMatch = objectRegex.exec(block);
+                while (objectMatch) {
+                    const openAttrs = String(objectMatch[1] || '');
+                    const objectBody = String(objectMatch[2] || '');
+                    const objectBlock = `<object ${openAttrs}>${objectBody}</object>`;
+                    if (/\bname="collision"\b[\s\S]*?\bvalue="false"/i.test(objectBlock)) {
+                        objectMatch = objectRegex.exec(block);
+                        continue;
+                    }
+                    const xMatch = openAttrs.match(/\bx="(-?\d+(?:\.\d+)?)"/);
+                    const yMatch = openAttrs.match(/\by="(-?\d+(?:\.\d+)?)"/);
+                    const polyMatch = objectBody.match(/<polygon\s+points="([^"]+)"/);
+                    if (xMatch && yMatch && polyMatch) {
+                        const ox = Number(xMatch[1] || 0);
+                        const oy = Number(yMatch[1] || 0);
+                        const points = String(polyMatch[1] || '')
+                            .split(' ')
+                            .map((s) => s.trim())
+                            .filter(Boolean)
+                            .map((pair) => {
+                                const [pxRaw, pyRaw] = pair.split(',');
+                                return { x: ox + Number(pxRaw || 0), y: oy + Number(pyRaw || 0) };
+                            })
+                            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+                        if (points.length >= 3) polys.push({ points });
+                    }
+                    objectMatch = objectRegex.exec(block);
+                }
+                if (polys.length) collisionPolygonsByTileId.set(localId, polys);
+            }
             match = tileBlockRegex.exec(text);
         }
-        return { tileImagesById: out, tileoffsetX, tileoffsetY, tilesetTileWidth, tilesetTileHeight };
+        return {
+            tileImagesById: out,
+            tileoffsetX,
+            tileoffsetY,
+            tilesetTileWidth,
+            tilesetTileHeight,
+            collisionTileIds,
+            collisionPolygonsByTileId,
+            imageSizeByTileId,
+            imageNameByTileId
+        };
     }
 
     getTiledMapConfig(mapCode) {
@@ -3931,6 +4010,329 @@ export class Game {
         out.push(direct);
         out.push(`${String(tilesBaseUrl || '/').replace(/\/+$/, '')}/${basename}`);
         return [...new Set(out)];
+    }
+
+    isPassThroughTileName(imageName) {
+        const s = String(imageName || '').toLowerCase();
+        if (!s) return false;
+        if (s.includes('archway')) return true;
+        if (s.includes('dooropen')) return true;
+        if (s.includes('gateopen')) return true;
+        if (s.includes('wallhole')) return true;
+        return false;
+    }
+
+    shiftBlockedCell(col, row, imageName, mapWidth, mapHeight) {
+        const s = String(imageName || '').toLowerCase();
+        let nextCol = col;
+        let nextRow = row;
+        if (s.includes('_s.')) {
+            nextCol += 1;
+            nextRow += 1;
+        } else if (s.includes('_w.')) {
+            nextCol += 1;
+        } else if (s.includes('_e.')) {
+            nextRow += 1;
+        }
+        return {
+            col: Math.max(0, Math.min(mapWidth - 1, nextCol)),
+            row: Math.max(0, Math.min(mapHeight - 1, nextRow))
+        };
+    }
+
+    resolveTiledTilesetForGid(tilesetSets, gid) {
+        let best = null;
+        for (const set of tilesetSets) {
+            if (Number(set?.firstgid || 0) <= gid) best = set;
+            else break;
+        }
+        return best;
+    }
+
+    collectWallLayerNames(layout) {
+        const out = new Set();
+        const layers = Array.isArray(layout?.layers) ? layout.layers : [];
+        for (const layer of layers) {
+            if (layer?.type !== 'tilelayer') continue;
+            if (layer?.visible === false) continue;
+            const layerName = String(layer?.name || '');
+            if (TILED_WALL_LAYER_NAMES.has(layerName.toLowerCase())) out.add(layerName);
+        }
+        return out;
+    }
+
+    ensureTiledCollisionDebugCache(mapCode = this.currentMapCode) {
+        const code = String(mapCode || '').toUpperCase();
+        const cached = this.tiledCollisionDebugCache?.[code];
+        if (cached) return cached;
+
+        const layout = this.tiledMapLayouts?.[code];
+        const tileset = this.tiledTilesets?.[code];
+        if (!layout || !tileset || !Array.isArray(tileset?.sets) || !tileset.sets.length) return null;
+
+        const mapWidth = Math.max(1, Math.floor(Number(layout.width || 1)));
+        const mapHeight = Math.max(1, Math.floor(Number(layout.height || 1)));
+        const mapTileWidth = Math.max(1, Number(layout.tilewidth || 1));
+        const mapTileHeight = Math.max(1, Number(layout.tileheight || 1));
+        const layers = Array.isArray(layout.layers) ? layout.layers : [];
+        const tilesetSets = [...tileset.sets].sort((a, b) => Number(a.firstgid || 0) - Number(b.firstgid || 0));
+        const wallLayerNames = this.collectWallLayerNames(layout);
+        const blockedCells = [];
+        const detailedPolygons = [];
+        const noCollisionPolygons = [];
+        const passThroughByCell = this.collectPassThroughCells(layout, tilesetSets, mapWidth, mapHeight, wallLayerNames);
+        const cfg = this.getIsoProjectionConfig();
+
+        for (const layer of layers) {
+            if (layer?.type === 'objectgroup' && layer?.visible !== false) {
+                const objects = Array.isArray(layer?.objects) ? layer.objects : [];
+                for (const obj of objects) {
+                    if (!this.hasNoCollisionProperty(obj?.properties)) continue;
+                    const baseX = Number(obj?.x || 0);
+                    const baseY = Number(obj?.y || 0);
+                    const poly = Array.isArray(obj?.polygon) ? obj.polygon : [];
+                    const points = poly
+                        .map((pt) => this.tiledObjectToWorldCoords(layout, baseX + Number(pt?.x || 0), baseY + Number(pt?.y || 0)))
+                        .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+                    if (points.length >= 3) noCollisionPolygons.push({ points });
+                }
+                continue;
+            }
+            if (layer?.type !== 'tilelayer') continue;
+            if (layer?.visible === false) continue;
+            const layerName = String(layer?.name || '');
+            if (!wallLayerNames.has(layerName)) continue;
+            const data = Array.isArray(layer?.data) ? layer.data : [];
+            const limit = Math.min(data.length, mapWidth * mapHeight);
+            for (let idx = 0; idx < limit; idx++) {
+                const rawGid = Number(data[idx] || 0) >>> 0;
+                if (!rawGid) continue;
+                const gid = rawGid & TILED_GID_MASK & ~TILED_GID_FLIP_MASK;
+                if (!gid) continue;
+                const set = this.resolveTiledTilesetForGid(tilesetSets, gid);
+                if (!set) continue;
+                const localTileId = gid - Math.max(1, Number(set.firstgid || 1));
+                const rawCol = idx % mapWidth;
+                const rawRow = Math.floor(idx / mapWidth);
+                const imageName = String(set.imageNameByTileId?.get(localTileId) || '').toLowerCase();
+                if (passThroughByCell.has(`${rawCol},${rawRow}`)) continue;
+
+                const localPolys = set.collisionPolygonsByTileId?.get(localTileId);
+
+                if (set.collisionTileIds?.has(localTileId) && (!localPolys || !localPolys.length) && !this.isPassThroughTileName(imageName)) {
+                    const shifted = this.shiftBlockedCell(rawCol, rawRow, imageName, mapWidth, mapHeight);
+                    const col = shifted.col;
+                    const row = shifted.row;
+                    blockedCells.push({ col, row });
+                }
+
+                if (passThroughByCell.has(`${rawCol},${rawRow}`)) continue;
+                if (this.isPassThroughTileName(imageName)) continue;
+                if (!localPolys?.length) continue;
+                const imageSize = set.imageSizeByTileId?.get(localTileId) || { width: mapTileWidth, height: mapTileHeight };
+                if (!cfg) continue;
+                const projected = this.isoGridToRenderCoords(rawCol, rawRow, cfg);
+                const tilesetTileWidth = Math.max(1, Number(set.tilesetTileWidth || mapTileWidth || 1));
+                const tilesetTileHeight = Math.max(1, Number(set.tilesetTileHeight || mapTileHeight || 1));
+                const spriteScale = cfg.scale * (mapTileWidth / tilesetTileWidth);
+                const drawW = imageSize.width * spriteScale;
+                const drawH = imageSize.height * spriteScale;
+                const offsetX = Number(set.tileoffsetX || 0) * spriteScale;
+                const offsetY = Number(set.tileoffsetY || 0) * spriteScale;
+                const imageTopLeftX = projected.x - drawW * 0.5 + offsetX;
+                const imageTopLeftY = projected.y - drawH + (tilesetTileHeight * spriteScale) + offsetY;
+
+                for (const localPoly of localPolys) {
+                    const points = localPoly.points.map((p) => {
+                        const px = imageTopLeftX + Number(p.x || 0) * spriteScale;
+                        const py = imageTopLeftY + Number(p.y || 0) * spriteScale;
+                        return this.renderToWorldCoords(px, py);
+                    });
+                    if (points.length >= 3) detailedPolygons.push({ points });
+                }
+            }
+        }
+
+        const next = { blockedCells: this.carveBlockedDebugCellsWithNoCollision(blockedCells, mapWidth, mapHeight, noCollisionPolygons), detailedPolygons, noCollisionPolygons };
+        this.tiledCollisionDebugCache[code] = next;
+        return next;
+    }
+
+    carveBlockedDebugCellsWithNoCollision(blockedCells, mapWidth, mapHeight, noCollisionPolygons) {
+        const cells = Array.isArray(blockedCells) ? blockedCells : [];
+        const polygons = Array.isArray(noCollisionPolygons) ? noCollisionPolygons : [];
+        if (!cells.length || !polygons.length) return cells;
+        const cellWidth = this.mapWidth / Math.max(1, mapWidth);
+        const cellHeight = this.mapHeight / Math.max(1, mapHeight);
+        return cells.filter((cell) => {
+            const col = Number(cell?.col || 0);
+            const row = Number(cell?.row || 0);
+            const minX = col * cellWidth;
+            const maxX = (col + 1) * cellWidth;
+            const minY = row * cellHeight;
+            const maxY = (row + 1) * cellHeight;
+            const probes = [
+                { x: (minX + maxX) * 0.5, y: (minY + maxY) * 0.5 },
+                { x: minX + cellWidth * 0.2, y: minY + cellHeight * 0.2 },
+                { x: maxX - cellWidth * 0.2, y: minY + cellHeight * 0.2 },
+                { x: minX + cellWidth * 0.2, y: maxY - cellHeight * 0.2 },
+                { x: maxX - cellWidth * 0.2, y: maxY - cellHeight * 0.2 }
+            ];
+            for (const poly of polygons) {
+                const points = Array.isArray(poly?.points) ? poly.points : [];
+                if (points.length < 3) continue;
+                const bounds = this.getPolygonBounds(points);
+                if (maxX < bounds.minX || minX > bounds.maxX || maxY < bounds.minY || minY > bounds.maxY) continue;
+                if (probes.some((probe) => this.pointInPolygon(probe.x, probe.y, points))) return false;
+            }
+            return true;
+        });
+    }
+
+    getPolygonBounds(points) {
+        const out = { minX: Number.POSITIVE_INFINITY, maxX: Number.NEGATIVE_INFINITY, minY: Number.POSITIVE_INFINITY, maxY: Number.NEGATIVE_INFINITY };
+        for (const point of Array.isArray(points) ? points : []) {
+            const x = Number(point?.x || 0);
+            const y = Number(point?.y || 0);
+            if (x < out.minX) out.minX = x;
+            if (x > out.maxX) out.maxX = x;
+            if (y < out.minY) out.minY = y;
+            if (y > out.maxY) out.maxY = y;
+        }
+        return out;
+    }
+
+    pointInPolygon(x, y, points) {
+        let inside = false;
+        const list = Array.isArray(points) ? points : [];
+        for (let i = 0, j = list.length - 1; i < list.length; j = i++) {
+            const xi = Number(list[i]?.x || 0);
+            const yi = Number(list[i]?.y || 0);
+            const xj = Number(list[j]?.x || 0);
+            const yj = Number(list[j]?.y || 0);
+            const intersects = ((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / Math.max(0.000001, yj - yi) + xi);
+            if (intersects) inside = !inside;
+        }
+        return inside;
+    }
+
+    hasNoCollisionProperty(properties) {
+        const list = Array.isArray(properties) ? properties : [];
+        for (const prop of list) {
+            const name = String(prop?.name || '').trim().toLowerCase();
+            if (name !== 'nocolission' && name !== 'nocollision' && name !== 'no_collision') continue;
+            return Boolean(prop?.value);
+        }
+        return false;
+    }
+
+    collectPassThroughCells(layout, tilesetSets, mapWidth, mapHeight, wallLayerNames) {
+        const out = new Set();
+        const layers = Array.isArray(layout?.layers) ? layout.layers : [];
+        for (const layer of layers) {
+            if (layer?.type !== 'tilelayer') continue;
+            if (layer?.visible === false) continue;
+            const layerName = String(layer?.name || '');
+            const isWallLayer = wallLayerNames.has(layerName);
+            if (!isWallLayer) continue;
+            const data = Array.isArray(layer?.data) ? layer.data : [];
+            const limit = Math.min(data.length, mapWidth * mapHeight);
+            for (let idx = 0; idx < limit; idx++) {
+                const rawGid = Number(data[idx] || 0) >>> 0;
+                if (!rawGid) continue;
+                const col = idx % mapWidth;
+                const row = Math.floor(idx / mapWidth);
+                const gid = rawGid & TILED_GID_MASK & ~TILED_GID_FLIP_MASK;
+                if (!gid) continue;
+                const set = this.resolveTiledTilesetForGid(tilesetSets, gid);
+                if (!set) continue;
+                const localTileId = gid - Math.max(1, Number(set.firstgid || 1));
+                const imageName = String(set.imageNameByTileId?.get(localTileId) || '').toLowerCase();
+                if (this.isPassThroughTileName(imageName)) out.add(`${col},${row}`);
+            }
+        }
+        return out;
+    }
+
+    drawTiledCollisionDebugOverlay() {
+        const code = String(this.currentMapCode || '').toUpperCase();
+        const layout = this.tiledMapLayouts?.[code];
+        const debug = this.ensureTiledCollisionDebugCache(code);
+        if (!layout || !debug) return;
+
+        const mapWidth = Math.max(1, Math.floor(Number(layout.width || 1)));
+        const mapHeight = Math.max(1, Math.floor(Number(layout.height || 1)));
+        const isIso = this.isIsometricMap();
+
+        this.ctx.save();
+        this.ctx.lineJoin = 'round';
+        this.ctx.lineCap = 'round';
+
+        this.ctx.fillStyle = 'rgba(255, 80, 80, 0.16)';
+        this.ctx.strokeStyle = 'rgba(255, 110, 110, 0.92)';
+        this.ctx.lineWidth = 1.5;
+
+        for (const cell of debug.blockedCells) {
+            const col = Number(cell?.col || 0);
+            const row = Number(cell?.row || 0);
+            if (isIso) {
+                const top = this.isoGridToRenderCoords(col, row);
+                const right = this.isoGridToRenderCoords(col + 1, row);
+                const bottom = this.isoGridToRenderCoords(col + 1, row + 1);
+                const left = this.isoGridToRenderCoords(col, row + 1);
+                this.ctx.beginPath();
+                this.ctx.moveTo(top.x - this.camera.x, top.y - this.camera.y);
+                this.ctx.lineTo(right.x - this.camera.x, right.y - this.camera.y);
+                this.ctx.lineTo(bottom.x - this.camera.x, bottom.y - this.camera.y);
+                this.ctx.lineTo(left.x - this.camera.x, left.y - this.camera.y);
+                this.ctx.closePath();
+                this.ctx.fill();
+                this.ctx.stroke();
+                continue;
+            }
+            const cellW = this.mapWidth / Math.max(1, mapWidth);
+            const cellH = this.mapHeight / Math.max(1, mapHeight);
+            const x = col * cellW;
+            const y = row * cellH;
+            const projected = this.worldToRenderCoords(x, y);
+            this.ctx.fillRect(projected.x - this.camera.x, projected.y - this.camera.y, cellW, cellH);
+            this.ctx.strokeRect(projected.x - this.camera.x, projected.y - this.camera.y, cellW, cellH);
+        }
+
+        this.ctx.strokeStyle = 'rgba(255, 214, 102, 0.92)';
+        this.ctx.lineWidth = 2;
+        for (const poly of debug.detailedPolygons || []) {
+            const points = Array.isArray(poly?.points) ? poly.points : [];
+            if (points.length < 3) continue;
+            this.ctx.beginPath();
+            for (let i = 0; i < points.length; i++) {
+                const projected = this.worldToRenderCoords(Number(points[i].x || 0), Number(points[i].y || 0));
+                const sx = projected.x - this.camera.x;
+                const sy = projected.y - this.camera.y;
+                if (i === 0) this.ctx.moveTo(sx, sy);
+                else this.ctx.lineTo(sx, sy);
+            }
+            this.ctx.closePath();
+            this.ctx.stroke();
+        }
+
+        this.ctx.strokeStyle = 'rgba(80, 220, 255, 0.95)';
+        this.ctx.lineWidth = 2;
+        for (const poly of debug.noCollisionPolygons || []) {
+            const points = Array.isArray(poly?.points) ? poly.points : [];
+            if (points.length < 3) continue;
+            this.ctx.beginPath();
+            for (let i = 0; i < points.length; i++) {
+                const projected = this.worldToRenderCoords(Number(points[i].x || 0), Number(points[i].y || 0));
+                const sx = projected.x - this.camera.x;
+                const sy = projected.y - this.camera.y;
+                if (i === 0) this.ctx.moveTo(sx, sy);
+                else this.ctx.lineTo(sx, sy);
+            }
+            this.ctx.closePath();
+            this.ctx.stroke();
+        }
+        this.ctx.restore();
     }
 
     /**
@@ -7044,7 +7446,9 @@ export class Game {
         this.ctx.save();
 
         // Contorno das areas de colisao configuradas no mapa.
-        if (!this.hasTiledLayout(this.currentMapCode)) {
+        if (this.hasTiledLayout(this.currentMapCode)) {
+            this.drawTiledCollisionDebugOverlay();
+        } else {
             for (const feature of this.mapFeatures || []) {
                 if (!feature || !feature.collision) continue;
                 this.ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';

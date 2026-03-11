@@ -14,12 +14,22 @@ import { DistributedLockService } from './services/DistributedLockService';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || '0.0.0.0');
 const parsedWorldStateMs = Number(process.env.WORLD_STATE_MS);
 const WORLD_STATE_MS = Number.isFinite(parsedWorldStateMs)
     ? Math.max(40, Math.min(250, Math.floor(parsedWorldStateMs)))
     : 66;
 app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
     res.type('application/json').send('{}');
+});
+app.get('/healthz', async (_req, res) => {
+    try {
+        await prisma.$queryRaw`SELECT 1`;
+        res.status(200).json({ ok: true });
+    } catch (error) {
+        console.error('healthcheck_error', error);
+        res.status(503).json({ ok: false });
+    }
 });
 app.use(express.static(path.resolve(process.cwd(), 'public')));
 
@@ -40,9 +50,14 @@ async function initializeServer() {
         const mobService = new MobService();
         const gameController = new GameController(persistence, mobService, lockService);
         const wsHandler = new WSHandler(gameController);
-        const mobTemplates = await persistence.getMobTemplates();
-        mobService.loadTemplateCache(mobTemplates);
-
+        try {
+            const mobTemplates = await persistence.getMobTemplates();
+            mobService.loadTemplateCache(mobTemplates);
+        } catch (error) {
+            console.error('mob_template_bootstrap_error', error);
+            logEvent('ERROR', 'mob_template_bootstrap_error', { error: String(error) });
+            mobService.loadTemplateCache([]);
+        }
         for (const mapKey of MAP_KEYS) {
             for (const mapId of MAP_IDS) {
                 const mapInstanceId = composeMapInstanceId(mapKey, mapId);
@@ -148,14 +163,19 @@ async function initializeServer() {
         process.on('SIGINT', () => { void shutdown('SIGINT'); });
         process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
-        server.listen(PORT, () => {
-            logEvent('INFO', 'server_started', { port: PORT });
-            console.log(`Server running on http://localhost:${PORT}`);
+        server.listen(PORT, HOST, () => {
+            logEvent('INFO', 'server_started', { port: PORT, host: HOST });
+            console.log(`Server running on http://${HOST}:${PORT}`);
         });
     } catch (error) {
+        console.error('server_init_error', error);
         logEvent('ERROR', 'server_init_error', { error: String(error) });
         process.exit(1);
     }
 }
 
 initializeServer();
+
+
+
+

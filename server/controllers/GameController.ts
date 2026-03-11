@@ -584,7 +584,9 @@ export class GameController {
                         assetKey: mapMetadata.assetKey,
                         tmjUrl: mapMetadata.tmjUrl,
                         tilesBaseUrl: mapMetadata.tilesBaseUrl,
-                        orientation: mapMetadata.orientation
+                        orientation: mapMetadata.orientation,
+                        worldTileSize: mapMetadata.worldTileSize,
+                        worldScale: mapMetadata.worldScale
                     }
                     : null,
                 role: player.role,
@@ -1578,7 +1580,9 @@ export class GameController {
                     assetKey: mapMetadata.assetKey,
                     tmjUrl: mapMetadata.tmjUrl,
                     tilesBaseUrl: mapMetadata.tilesBaseUrl,
-                    orientation: mapMetadata.orientation
+                    orientation: mapMetadata.orientation,
+                    worldTileSize: mapMetadata.worldTileSize,
+                    worldScale: mapMetadata.worldScale
                 }
                 : null
         };

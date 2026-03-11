@@ -18,12 +18,23 @@ const redis_1 = require("./utils/redis");
 const DistributedLockService_1 = require("./services/DistributedLockService");
 const app = (0, express_1.default)();
 const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || '0.0.0.0');
 const parsedWorldStateMs = Number(process.env.WORLD_STATE_MS);
 const WORLD_STATE_MS = Number.isFinite(parsedWorldStateMs)
     ? Math.max(40, Math.min(250, Math.floor(parsedWorldStateMs)))
     : 66;
 app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
     res.type('application/json').send('{}');
+});
+app.get('/healthz', async (_req, res) => {
+    try {
+        await prisma_1.default.$queryRaw `SELECT 1`;
+        res.status(200).json({ ok: true });
+    }
+    catch (error) {
+        console.error('healthcheck_error', error);
+        res.status(503).json({ ok: false });
+    }
 });
 app.use(express_1.default.static(path_1.default.resolve(process.cwd(), 'public')));
 const server = (0, http_1.createServer)(app);
@@ -37,8 +48,15 @@ async function initializeServer() {
         const mobService = new MobService_1.MobService();
         const gameController = new GameController_1.GameController(persistence, mobService, lockService);
         const wsHandler = new WSHandler_1.WSHandler(gameController);
-        const mobTemplates = await persistence.getMobTemplates();
-        mobService.loadTemplateCache(mobTemplates);
+        try {
+            const mobTemplates = await persistence.getMobTemplates();
+            mobService.loadTemplateCache(mobTemplates);
+        }
+        catch (error) {
+            console.error('mob_template_bootstrap_error', error);
+            (0, logger_1.logEvent)('ERROR', 'mob_template_bootstrap_error', { error: String(error) });
+            mobService.loadTemplateCache([]);
+        }
         for (const mapKey of config_1.MAP_KEYS) {
             for (const mapId of config_1.MAP_IDS) {
                 const mapInstanceId = (0, config_1.composeMapInstanceId)(mapKey, mapId);
@@ -147,12 +165,13 @@ async function initializeServer() {
         };
         process.on('SIGINT', () => { void shutdown('SIGINT'); });
         process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
-        server.listen(PORT, () => {
-            (0, logger_1.logEvent)('INFO', 'server_started', { port: PORT });
-            console.log(`Server running on http://localhost:${PORT}`);
+        server.listen(PORT, HOST, () => {
+            (0, logger_1.logEvent)('INFO', 'server_started', { port: PORT, host: HOST });
+            console.log(`Server running on http://${HOST}:${PORT}`);
         });
     }
     catch (error) {
+        console.error('server_init_error', error);
         (0, logger_1.logEvent)('ERROR', 'server_init_error', { error: String(error) });
         process.exit(1);
     }

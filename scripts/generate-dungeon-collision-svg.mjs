@@ -5,8 +5,10 @@ const ROOT = process.cwd();
 const TMJ_PATH = path.join(ROOT, 'public', 'maps', 'dungeon1', 'dungeon1.tmj');
 const TSX_PATH = path.join(ROOT, 'public', 'maps', 'dungeon1', 'dungeon.tsx');
 const OUT_PATH = path.join(ROOT, 'public', 'maps', 'dungeon1', 'collision-debug.svg');
+
 const RAW_GID_MASK = 0x1fffffff;
 const FLIP_MASK = 0xe0000000;
+const WALL_LAYER_NAMES = new Set(['paredes', 'walls', 'wall', 'collision', 'colisao', 'collisions']);
 
 function decodeLayerData(layer, width, height) {
   if (Array.isArray(layer?.data)) return layer.data;
@@ -21,17 +23,58 @@ function decodeLayerData(layer, width, height) {
   return out;
 }
 
-function parseCollisionTileIds(tsxRaw) {
-  const ids = new Set();
+function parseTilesetCollision(tsxRaw) {
+  const collisionTileIds = new Set();
+  const imageNameByTileId = new Map();
   const tileRegex = /<tile\s+id="(\d+)"[\s\S]*?<\/tile>/g;
-  let m = tileRegex.exec(tsxRaw);
-  while (m) {
-    const id = Number(m[1]);
-    const block = String(m[0] || '');
-    if (block.includes('<objectgroup') && block.includes('<object')) ids.add(id);
-    m = tileRegex.exec(tsxRaw);
+  let match = tileRegex.exec(tsxRaw);
+  while (match) {
+    const tileId = Number(match[1]);
+    const block = String(match[0] || '');
+    const imageSrcMatch = block.match(/<image\s+[^>]*source="([^"]+)"/);
+    if (imageSrcMatch?.[1]) {
+      const src = String(imageSrcMatch[1] || '');
+      const imageName = src.split('/').pop()?.split('\\').pop() || src;
+      imageNameByTileId.set(tileId, imageName);
+    }
+    if (block.includes('<objectgroup') && block.includes('<object')) {
+      collisionTileIds.add(tileId);
+    }
+    match = tileRegex.exec(tsxRaw);
   }
-  return ids;
+  return { collisionTileIds, imageNameByTileId };
+}
+
+function isPassThroughTileName(imageName) {
+  const s = String(imageName || '').toLowerCase();
+  if (!s) return false;
+  return s.includes('archway') || s.includes('dooropen') || s.includes('gateopen') || s.includes('wallhole');
+}
+
+function shiftBlockedCell(x, y, imageName, mapWidth, mapHeight) {
+  const s = String(imageName || '').toLowerCase();
+  let nx = x;
+  let ny = y;
+  if (s.includes('_s.')) {
+    nx += 1;
+    ny += 1;
+  } else if (s.includes('_w.')) {
+    nx += 1;
+  } else if (s.includes('_e.')) {
+    ny += 1;
+  }
+  return {
+    x: clamp(nx, 0, mapWidth - 1),
+    y: clamp(ny, 0, mapHeight - 1)
+  };
+}
+
+function clamp(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
 }
 
 const tmjRaw = fs.readFileSync(TMJ_PATH, 'utf8');
@@ -43,24 +86,50 @@ const height = Number(map.height || 0);
 const tileW = Number(map.tilewidth || 256);
 const tileH = Number(map.tileheight || 128);
 const layers = Array.isArray(map.layers) ? map.layers : [];
-const wallLayer = layers.find((l) => l?.type === 'tilelayer' && l?.visible !== false && String(l?.name || '') === 'Paredes');
-if (!wallLayer) {
-  throw new Error('Camada "Paredes" nao encontrada no TMJ.');
+const wallLayers = layers.filter((layer) => {
+  if (layer?.type !== 'tilelayer') return false;
+  if (layer?.visible === false) return false;
+  return WALL_LAYER_NAMES.has(String(layer?.name || '').toLowerCase());
+});
+
+if (!wallLayers.length) {
+  throw new Error('Nenhuma camada de parede encontrada no TMJ.');
 }
 
-const collisionIds = parseCollisionTileIds(tsxRaw);
-const data = decodeLayerData(wallLayer, width, height);
-const blocked = [];
-for (let idx = 0; idx < Math.min(data.length, width * height); idx += 1) {
-  const rawGid = Number(data[idx] || 0);
-  if (!rawGid) continue;
-  const gid = (rawGid >>> 0) & RAW_GID_MASK & ~FLIP_MASK;
-  const tileId = gid - 1;
-  if (!collisionIds.has(tileId)) continue;
-  const col = idx % width;
-  const row = Math.floor(idx / width);
-  blocked.push({ col, row, gid, tileId });
+const { collisionTileIds, imageNameByTileId } = parseTilesetCollision(tsxRaw);
+const blockedKeySet = new Set();
+const passThroughKeySet = new Set();
+
+for (const wallLayer of wallLayers) {
+  const data = decodeLayerData(wallLayer, width, height);
+  const limit = Math.min(data.length, width * height);
+  for (let idx = 0; idx < limit; idx += 1) {
+    const rawGid = Number(data[idx] || 0);
+    if (!rawGid) continue;
+    const gid = (rawGid >>> 0) & RAW_GID_MASK & ~FLIP_MASK;
+    if (gid <= 0) continue;
+    const tileId = gid - 1;
+    const col = idx % width;
+    const row = Math.floor(idx / width);
+    const imageName = String(imageNameByTileId.get(tileId) || '');
+    if (isPassThroughTileName(imageName)) {
+      passThroughKeySet.add(`${col},${row}`);
+      continue;
+    }
+    if (!collisionTileIds.has(tileId)) continue;
+    const shifted = shiftBlockedCell(col, row, imageName, width, height);
+    blockedKeySet.add(`${shifted.x},${shifted.y}`);
+  }
 }
+
+for (const passThroughKey of passThroughKeySet) {
+  blockedKeySet.delete(passThroughKey);
+}
+
+const blocked = Array.from(blockedKeySet, (key) => {
+  const [colRaw, rowRaw] = key.split(',');
+  return { col: Number(colRaw), row: Number(rowRaw) };
+});
 
 const scale = 0.2;
 const halfW = tileW / 2;
@@ -99,10 +168,11 @@ for (const cell of blocked) {
 }
 
 const legend = `
-  <rect x="14" y="14" width="300" height="66" rx="8" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.2)"/>
+  <rect x="14" y="14" width="360" height="84" rx="8" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.2)"/>
   <text x="28" y="38" fill="#fff" font-size="18" font-family="Segoe UI, Arial">Dungeon Collision Debug</text>
-  <rect x="28" y="48" width="20" height="12" fill="rgba(255,50,50,0.45)" stroke="rgba(255,90,90,0.95)"/>
-  <text x="56" y="59" fill="#fff" font-size="14" font-family="Segoe UI, Arial">Célula bloqueada (servidor)</text>
+  <rect x="28" y="50" width="20" height="12" fill="rgba(255,50,50,0.45)" stroke="rgba(255,90,90,0.95)"/>
+  <text x="56" y="61" fill="#fff" font-size="14" font-family="Segoe UI, Arial">Celula bloqueada efetiva (servidor)</text>
+  <text x="28" y="83" fill="#c8d2e0" font-size="13" font-family="Segoe UI, Arial">blocked=${blocked.length} passThrough=${passThroughKeySet.size}</text>
 `;
 
 const svg = `<?xml version="1.0" encoding="UTF-8"?>
@@ -116,3 +186,4 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 fs.writeFileSync(OUT_PATH, svg, 'utf8');
 console.log(`OK: ${OUT_PATH}`);
 console.log(`blocked_cells=${blocked.length}`);
+console.log(`pass_through_cells=${passThroughKeySet.size}`);

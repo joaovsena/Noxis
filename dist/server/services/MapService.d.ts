@@ -1,5 +1,15 @@
 import { PlayerRuntime } from '../models/types';
 export declare class MapService {
+    getMapWorld(mapKey: string): {
+        width: number;
+        height: number;
+    };
+    getMapNavGrid(mapKey: string): {
+        cols: number;
+        rows: number;
+        cellWidth: number;
+        cellHeight: number;
+    };
     mapInstanceId(mapKey: string, mapId: string): string;
     getAreaIdForPlayer(player: PlayerRuntime): string;
     getMapTiledCollisionSampler(mapKey: string): {

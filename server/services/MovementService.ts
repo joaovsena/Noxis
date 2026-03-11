@@ -5,18 +5,18 @@ import { MapService } from './MapService';
 
 const PATHFIND_CELL_SIZE = 12;
 const PATHFIND_MAX_ITERS = 18000;
-const PATHFIND_MAX_ITERS_DUNGEON = 6500;
+const PATHFIND_MAX_ITERS_DUNGEON = 18000;
 const PATH_RECALC_MS = 280;
 const PATH_PROBE_RADIUS = Math.max(8, PLAYER_HALF_SIZE - 6);
 const PATH_STUCK_REPATH_MS = 520;
 const PATH_STUCK_TIMEOUT_MS = 1200;
 const PATH_NEARBY_GOAL_MAX_CANDIDATES = 72;
-const PATH_NEARBY_GOAL_MAX_CANDIDATES_DUNGEON = 18;
-const PATH_NEARBY_GOAL_MAX_RADIUS = 42;
+const PATH_NEARBY_GOAL_MAX_CANDIDATES_DUNGEON = 96;
+const PATH_NEARBY_GOAL_MAX_RADIUS = 72;
 const ISO_AXIAL_RATIO = 2;
 const PATH_PLAN_RADIUS = Math.max(6, PATH_PROBE_RADIUS - 4);
 const PATHFIND_BUDGET_MS = 12;
-const PATHFIND_BUDGET_MS_DUNGEON = 6;
+const PATHFIND_BUDGET_MS_DUNGEON = 18;
 const MOVE_ACK_PATH_NODE_LIMIT = 80;
 
 type GetEffectAggregateFn = (player: PlayerRuntime, now: number) => { moveMul?: number };
@@ -82,17 +82,7 @@ export class MovementService {
         if (dist <= 2) {
             if (Array.isArray(player.movePath) && player.movePath.length > 0) {
                 player.movePath.shift();
-                const next = player.movePath[0];
-                if (next) {
-                    player.targetX = next.x;
-                    player.targetY = next.y;
-                } else {
-                    player.targetX = player.x;
-                    player.targetY = player.y;
-                    player.pathDestinationX = player.x;
-                    player.pathDestinationY = player.y;
-                    player.rawMovePath = [];
-                }
+                this.advancePathAfterNode(player, now);
             }
             return;
         }
@@ -109,17 +99,7 @@ export class MovementService {
             }
             if (Array.isArray(player.movePath) && player.movePath.length > 0) {
                 player.movePath.shift();
-                const next = player.movePath[0];
-                if (next) {
-                    player.targetX = next.x;
-                    player.targetY = next.y;
-                } else {
-                    player.targetX = player.x;
-                    player.targetY = player.y;
-                    player.pathDestinationX = player.x;
-                    player.pathDestinationY = player.y;
-                    player.rawMovePath = [];
-                }
+                this.advancePathAfterNode(player, now);
             }
             return;
         }
@@ -190,6 +170,44 @@ export class MovementService {
         if (now < Number(player.nextPathfindAt || 0)) return;
         player.nextPathfindAt = now + PATH_RECALC_MS;
         this.assignPathTo(player, destinationX, destinationY);
+    }
+
+    private advancePathAfterNode(player: PlayerRuntime, now: number) {
+        const next = Array.isArray(player.movePath) ? player.movePath[0] : null;
+        if (next) {
+            player.targetX = next.x;
+            player.targetY = next.y;
+            return;
+        }
+
+        const destinationX = Number.isFinite(Number(player.pathDestinationX)) ? Number(player.pathDestinationX) : player.x;
+        const destinationY = Number.isFinite(Number(player.pathDestinationY)) ? Number(player.pathDestinationY) : player.y;
+        const remainingDistance = Math.hypot(destinationX - player.x, destinationY - player.y);
+        const continueThreshold = Math.max(PATHFIND_CELL_SIZE * 1.5, 18);
+        if (remainingDistance > continueThreshold) {
+            this.assignPathTo(player, destinationX, destinationY);
+            const repathNext = Array.isArray(player.movePath) ? player.movePath[0] : null;
+            if (repathNext) {
+                player.targetX = repathNext.x;
+                player.targetY = repathNext.y;
+                return;
+            }
+            if (!this.isPathSegmentBlocked(player.mapKey, player.x, player.y, destinationX, destinationY)) {
+                player.targetX = destinationX;
+                player.targetY = destinationY;
+                return;
+            }
+            player.targetX = destinationX;
+            player.targetY = destinationY;
+            player.nextPathfindAt = now;
+            return;
+        }
+
+        player.targetX = player.x;
+        player.targetY = player.y;
+        player.pathDestinationX = player.x;
+        player.pathDestinationY = player.y;
+        player.rawMovePath = [];
     }
 
     private getIsoMoveStepMultiplier(mapKey: string, ux: number, uy: number) {
@@ -342,8 +360,8 @@ export class MovementService {
         const world = this.mapService.getMapWorld(mapKey);
         const startRaw = this.worldToPathCell(mapKey, fromX, fromY);
         const goalRaw = this.worldToPathCell(mapKey, toX, toY);
-        const start = this.findNearestWalkableCell(mapKey, startRaw.cx, startRaw.cy, 20) || startRaw;
-        const goal = this.findNearestWalkableCell(mapKey, goalRaw.cx, goalRaw.cy, 72) || goalRaw;
+        const start = this.findNearestWalkableCell(mapKey, startRaw.cx, startRaw.cy, this.isDungeonMap(mapKey) ? 36 : 20) || startRaw;
+        const goal = this.findNearestWalkableCell(mapKey, goalRaw.cx, goalRaw.cy, this.isDungeonMap(mapKey) ? 140 : 72) || goalRaw;
         const sameCell = start.cx === goal.cx && start.cy === goal.cy;
         if (sameCell) return [{ x: clamp(toX, 0, world.width), y: clamp(toY, 0, world.height) }];
 
@@ -363,7 +381,9 @@ export class MovementService {
         const g = new Map<string, number>([[startKey, 0]]);
         const f = new Map<string, number>();
         const cameFrom = new Map<string, string>();
-        f.set(startKey, this.pathHeuristic(start.cx, start.cy, goal.cx, goal.cy));
+        let bestReachedKey = startKey;
+        let bestReachedHeuristic = this.pathHeuristic(start.cx, start.cy, goal.cx, goal.cy);
+        f.set(startKey, bestReachedHeuristic);
 
         const dirs = [
             { x: 1, y: 0, c: 1 },
@@ -414,8 +434,24 @@ export class MovementService {
                 else if (tentative >= Number(g.get(nkey) ?? Number.POSITIVE_INFINITY)) continue;
                 cameFrom.set(nkey, current);
                 g.set(nkey, tentative);
-                f.set(nkey, tentative + this.pathHeuristic(nx, ny, goal.cx, goal.cy));
+                const heuristic = this.pathHeuristic(nx, ny, goal.cx, goal.cy);
+                f.set(nkey, tentative + heuristic);
+                if (
+                    heuristic < bestReachedHeuristic
+                    || (
+                        heuristic === bestReachedHeuristic
+                        && tentative < Number(g.get(bestReachedKey) ?? Number.POSITIVE_INFINITY)
+                    )
+                ) {
+                    bestReachedKey = nkey;
+                    bestReachedHeuristic = heuristic;
+                }
             }
+        }
+        if (bestReachedKey !== startKey) {
+            const [bestCxRaw, bestCyRaw] = bestReachedKey.split(',');
+            const bestWorld = this.pathCellToWorld(mapKey, Number(bestCxRaw), Number(bestCyRaw));
+            return this.rebuildPath(mapKey, cameFrom, bestReachedKey, bestWorld.x, bestWorld.y);
         }
         return [];
     }

@@ -30,6 +30,8 @@ export type MapMetadata = {
     tilewidth: number;
     tileheight: number;
     orientation: string;
+    worldTileSize: number;
+    worldScale: number;
     world: { width: number; height: number };
 };
 
@@ -62,12 +64,7 @@ function loadMapMetadata(mapKey: string): MapMetadata | null {
     const tilewidth = Math.max(1, Number(doc.tilewidth || 1));
     const tileheight = Math.max(1, Number(doc.tileheight || 1));
     const orientation = String(doc.orientation || '').toLowerCase();
-    const configuredWorldWidth = Number(props.worldWidth ?? props.worldwidth);
-    const configuredWorldHeight = Number(props.worldHeight ?? props.worldheight);
-    const world = {
-        width: Number.isFinite(configuredWorldWidth) && configuredWorldWidth > 0 ? configuredWorldWidth : WORLD.width,
-        height: Number.isFinite(configuredWorldHeight) && configuredWorldHeight > 0 ? configuredWorldHeight : WORLD.height
-    };
+    const worldConfig = deriveWorldConfig(width, height, props);
     const configuredMapCode = String(props.mapCode ?? props.mapcode ?? '').trim();
     const mapCode = (configuredMapCode || assetKey).toUpperCase();
     const tilesBaseUrl = resolveTilesBaseUrl(assetDir, assetKey, tmjPath, doc, props);
@@ -83,8 +80,73 @@ function loadMapMetadata(mapKey: string): MapMetadata | null {
         tilewidth,
         tileheight,
         orientation,
-        world
+        worldTileSize: worldConfig.worldTileSize,
+        worldScale: worldConfig.worldScale,
+        world: worldConfig.world
     };
+}
+
+function deriveWorldConfig(
+    mapWidth: number,
+    mapHeight: number,
+    props: Record<string, unknown>
+) {
+    const configuredWorldWidth = Number(props.worldWidth ?? props.worldwidth);
+    const configuredWorldHeight = Number(props.worldHeight ?? props.worldheight);
+    if (Number.isFinite(configuredWorldWidth) && configuredWorldWidth > 0
+        && Number.isFinite(configuredWorldHeight) && configuredWorldHeight > 0) {
+        const tileSizeFromExplicit = Math.max(
+            1,
+            Number(props.worldTileSize ?? props.worldtilesize)
+                || Number(props.worldTileSizeX ?? props.worldtilesizex)
+                || Number(props.worldTileSizeY ?? props.worldtilesizey)
+                || Math.min(configuredWorldWidth / Math.max(1, mapWidth), configuredWorldHeight / Math.max(1, mapHeight))
+        );
+        return {
+            worldTileSize: tileSizeFromExplicit,
+            worldScale: 1,
+            world: {
+                width: configuredWorldWidth,
+                height: configuredWorldHeight
+            }
+        };
+    }
+
+    const configuredWorldScale = Number(props.worldScale ?? props.worldscale);
+    const safeWorldScale = Number.isFinite(configuredWorldScale) && configuredWorldScale > 0 ? configuredWorldScale : 1;
+    const configuredTileSize = Number(props.worldTileSize ?? props.worldtilesize);
+    const configuredTileSizeX = Number(props.worldTileSizeX ?? props.worldtilesizex);
+    const configuredTileSizeY = Number(props.worldTileSizeY ?? props.worldtilesizey);
+    const fallbackTileSizeX = WORLD.width / Math.max(1, mapWidth);
+    const fallbackTileSizeY = WORLD.height / Math.max(1, mapHeight);
+    const fallbackUnifiedTileSize = deriveDefaultWorldTileSize(
+        mapWidth,
+        mapHeight,
+        fallbackTileSizeX,
+        fallbackTileSizeY
+    );
+    const baseTileSize = Number.isFinite(configuredTileSize) && configuredTileSize > 0
+        ? configuredTileSize
+        : fallbackUnifiedTileSize;
+    const tileSizeX = (Number.isFinite(configuredTileSizeX) && configuredTileSizeX > 0 ? configuredTileSizeX : baseTileSize) * safeWorldScale;
+    const tileSizeY = (Number.isFinite(configuredTileSizeY) && configuredTileSizeY > 0 ? configuredTileSizeY : baseTileSize) * safeWorldScale;
+    return {
+        worldTileSize: baseTileSize,
+        worldScale: safeWorldScale,
+        world: {
+            width: Math.max(1, Math.round(mapWidth * tileSizeX)),
+            height: Math.max(1, Math.round(mapHeight * tileSizeY))
+        }
+    };
+}
+
+function deriveDefaultWorldTileSize(
+    mapWidth: number,
+    mapHeight: number,
+    fallbackTileSizeX: number,
+    fallbackTileSizeY: number
+) {
+    return Math.max(1, Math.round((fallbackTileSizeX + fallbackTileSizeY) * 0.5));
 }
 
 function resolveMapAssetKey(mapKey: string) {

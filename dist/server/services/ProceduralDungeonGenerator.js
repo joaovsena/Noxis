@@ -22,100 +22,53 @@ function rngFactory(seedInput) {
 }
 function generateDungeonLayout(instanceId, template) {
     const rand = rngFactory(`${template.id}:${instanceId}`);
-    const wall = 32;
-    const baseX = 420 + Math.floor(rand() * 240);
-    const baseY = 440 + Math.floor(rand() * 180);
-    const width = 2100;
-    const height = 1260;
-    const yGapA = baseY + 220 + Math.floor(rand() * 180);
-    const yGapB = baseY + 640 + Math.floor(rand() * 180);
-    const yDoor = baseY + 540 + Math.floor(rand() * 120);
-    const xWall1 = baseX + 520;
-    const xWall2 = baseX + 1060;
-    const xWall3 = baseX + 1570;
-    const gapSize = 160;
-    const features = [
-        { id: `${instanceId}-outer-top`, kind: 'building', shape: 'rect', x: baseX, y: baseY - wall, w: width, h: wall, collision: true },
-        { id: `${instanceId}-outer-bottom`, kind: 'building', shape: 'rect', x: baseX, y: baseY + height, w: width, h: wall, collision: true },
-        { id: `${instanceId}-outer-left`, kind: 'building', shape: 'rect', x: baseX - wall, y: baseY - wall, w: wall, h: height + wall * 2, collision: true },
-        { id: `${instanceId}-outer-right`, kind: 'building', shape: 'rect', x: baseX + width, y: baseY - wall, w: wall, h: height + wall * 2, collision: true },
-        { id: `${instanceId}-v1-top`, kind: 'ruins', shape: 'rect', x: xWall1, y: baseY, w: wall, h: Math.max(40, yGapA - baseY - gapSize / 2), collision: true },
-        { id: `${instanceId}-v1-bottom`, kind: 'ruins', shape: 'rect', x: xWall1, y: yGapA + gapSize / 2, w: wall, h: Math.max(40, baseY + height - (yGapA + gapSize / 2)), collision: true },
-        { id: `${instanceId}-v2-top`, kind: 'ruins', shape: 'rect', x: xWall2, y: baseY, w: wall, h: Math.max(40, yGapB - baseY - gapSize / 2), collision: true },
-        { id: `${instanceId}-v2-bottom`, kind: 'ruins', shape: 'rect', x: xWall2, y: yGapB + gapSize / 2, w: wall, h: Math.max(40, baseY + height - (yGapB + gapSize / 2)), collision: true },
-        // Parede da sala do boss com porta central dinamica.
-        { id: `${instanceId}-v3-top`, kind: 'ruins', shape: 'rect', x: xWall3, y: baseY, w: wall, h: Math.max(40, yDoor - baseY - gapSize / 2), collision: true },
-        { id: `${instanceId}-v3-bottom`, kind: 'ruins', shape: 'rect', x: xWall3, y: yDoor + gapSize / 2, w: wall, h: Math.max(40, baseY + height - (yDoor + gapSize / 2)), collision: true },
-        // Obstaculos leves para forcar corredores.
-        { id: `${instanceId}-h1`, kind: 'mountain', shape: 'rect', x: baseX + 180, y: baseY + 540, w: 260, h: 90, collision: true },
-        { id: `${instanceId}-h2`, kind: 'mountain', shape: 'rect', x: baseX + 740, y: baseY + 320, w: 320, h: 90, collision: true },
-        { id: `${instanceId}-h3`, kind: 'mountain', shape: 'rect', x: baseX + 1210, y: baseY + 820, w: 320, h: 90, collision: true },
-        { id: `${instanceId}-h4`, kind: 'mountain', shape: 'rect', x: baseX + 1710, y: baseY + 460, w: 300, h: 90, collision: true }
+    const features = [];
+    const room1Spawn = { x: 340, y: 2260 };
+    const roomCenters = [
+        { room: 2, x: 900, y: 1200 },
+        { room: 3, x: 1500, y: 1450 },
+        { room: 4, x: 1080, y: 1860 },
+        { room: 5, x: 1600, y: 2320 },
+        { room: 6, x: 2140, y: 1860 },
+        { room: 7, x: 2520, y: 1410 },
+        { room: 8, x: 2080, y: 980 }
     ];
     const mobSpawns = [];
     let mobSeq = 1;
-    const pushPack = (cx, cy, normalCount, eliteCount, radius) => {
-        for (let i = 0; i < normalCount; i++) {
+    const pushPack = (cx, cy, count, radius) => {
+        for (let i = 0; i < count; i++) {
             const angle = rand() * Math.PI * 2;
             const r = 20 + rand() * radius;
+            const elite = rand() < 0.22;
             mobSpawns.push({
-                id: `mob_n_${mobSeq++}`,
-                kind: 'normal',
-                x: cx + Math.cos(angle) * r,
-                y: cy + Math.sin(angle) * r
-            });
-        }
-        for (let i = 0; i < eliteCount; i++) {
-            const angle = rand() * Math.PI * 2;
-            const r = 16 + rand() * (radius * 0.7);
-            mobSpawns.push({
-                id: `mob_e_${mobSeq++}`,
-                kind: 'elite',
+                id: `${elite ? 'mob_e' : 'mob_n'}_${mobSeq++}`,
+                kind: elite ? 'elite' : 'normal',
                 x: cx + Math.cos(angle) * r,
                 y: cy + Math.sin(angle) * r,
-                hpMultiplier: 1.12 + rand() * 0.16
+                hpMultiplier: elite ? (1.08 + rand() * 0.2) : undefined
             });
         }
     };
-    // Sala inicial: packs densos, mas com espaco de manobra.
-    pushPack(baseX + 240, baseY + 220, 3, 1, 120);
-    pushPack(baseX + 260, baseY + 560, 4, 1, 140);
-    pushPack(baseX + 260, baseY + 940, 3, 1, 120);
-    // Corredor/sala intermediaria.
-    pushPack(baseX + 760, baseY + 220, 3, 1, 120);
-    pushPack(baseX + 920, baseY + 600, 5, 1, 160);
-    pushPack(baseX + 920, baseY + 980, 3, 1, 120);
-    // Ala final antes do boss.
-    pushPack(baseX + 1280, baseY + 260, 3, 1, 120);
-    pushPack(baseX + 1410, baseY + 640, 5, 2, 170);
-    pushPack(baseX + 1380, baseY + 980, 3, 1, 120);
-    // Subbosses para marcar progressao.
-    mobSpawns.push({ id: `mob_s_${mobSeq++}`, kind: 'subboss', x: baseX + 860, y: baseY + 640, hpMultiplier: 1.15 }, { id: `mob_s_${mobSeq++}`, kind: 'subboss', x: baseX + 1460, y: baseY + 860, hpMultiplier: 1.18 });
-    // Boss final.
+    // Salas 2..8: cada horda tem de 2 a 8 mobs.
+    for (const room of roomCenters) {
+        const hordeSize = 2 + Math.floor(rand() * 7);
+        pushPack(room.x, room.y, hordeSize, 130);
+    }
+    // Boss final apos as hordas.
     mobSpawns.push({
         id: 'boss_final',
         kind: 'boss',
-        x: baseX + 1860,
-        y: baseY + 640,
-        hpMultiplier: 0.9,
+        x: 1600,
+        y: 700,
+        hpMultiplier: 1.0,
         level: 7
     });
-    const doorFeature = {
-        id: `${instanceId}-boss-door`,
-        kind: 'building',
-        shape: 'rect',
-        x: xWall3,
-        y: yDoor - gapSize / 2,
-        w: wall,
-        h: gapSize,
-        collision: true
-    };
     return {
-        mapKey: `dng_${instanceId}`,
-        entrySpawn: { x: baseX + 120, y: baseY + 640 },
+        mapKey: template.id,
+        entrySpawn: room1Spawn,
         features,
         mobSpawns,
-        doorFeature,
+        doorFeature: null,
         bossAggroRange: 290
     };
 }
